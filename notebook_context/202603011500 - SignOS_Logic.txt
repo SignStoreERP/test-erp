@@ -1,0 +1,3544 @@
+SIGNOS BUSINESS LOGIC MASTER
+Generated: 2026-03-01 15:00:55.025429
+
+
+========================================
+FILE: cost_acrylic.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Acrylic Signs (v5.3 - Dual Track)
+ * Preserved for Admin Simulator and Profit Heatmap Analytics.
+ */
+function calculateAcrylic(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const totalSqFt = sqft * inputs.qty;
+
+    // Harmonize UI fractions to decimals
+    let thk = inputs.thickness;
+    if (thk === '1/4') thk = '0.25';
+    if (thk === '1/2') thk = '0.5';
+    if (thk === '3/4') thk = '0.75';
+    if (thk === '1') thk = '1';
+
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    let baseRate = 0;
+    if (thk === '0.25') {
+        if (totalSqFt <= parseFloat(data.ACR_14_T1_Max || 10)) baseRate = parseFloat(data.ACR_14_T1_Rate || 40);
+        else if (totalSqFt <= parseFloat(data.ACR_14_T2_Max || 20)) baseRate = parseFloat(data.ACR_14_T2_Rate || 35);
+        else baseRate = parseFloat(data.ACR_14_T3_Rate || 30);
+    } else if (thk === '0.5') {
+        if (totalSqFt <= parseFloat(data.ACR_12_T1_Max || 10)) baseRate = parseFloat(data.ACR_12_T1_Rate || 45);
+        else baseRate = parseFloat(data.ACR_12_T2_Rate || 40);
+    } else if (thk === '0.75') {
+        if (totalSqFt <= parseFloat(data.ACR_34_T1_Max || 10)) baseRate = parseFloat(data.ACR_34_T1_Rate || 55);
+        else baseRate = parseFloat(data.ACR_34_T2_Rate || 50);
+    } else {
+        if (totalSqFt <= parseFloat(data.ACR_1IN_T1_Max || 10)) baseRate = parseFloat(data.ACR_1IN_T1_Rate || 60);
+        else baseRate = parseFloat(data.ACR_1IN_T2_Rate || 55);
+    }
+
+    // Adders
+    if (inputs.method === 'direct_white') baseRate += parseFloat(data.Retail_Adder_2ndSurf || 5);
+    if (inputs.method === 'direct_3layer') baseRate += parseFloat(data.Retail_Adder_Blockout || 8);
+
+    // Apply Volume Discounts via Tier System
+    let discPct = 0;
+    let i = 1;
+    const tierLog = [];
+    while(data[`Tier_${i}_Qty`]) {
+        const tQty = parseFloat(data[`Tier_${i}_Qty`]);
+        const tDisc = parseFloat(data[`Tier_${i}_Disc`] || 0);
+        tierLog.push({ q: tQty, d: tDisc });
+        if (inputs.qty >= tQty) discPct = tDisc;
+        i++;
+    }
+
+    const retailPrint = (baseRate * (1 - discPct)) * totalSqFt;
+
+    let paintFee = 0;
+    if (inputs.paint) paintFee = parseFloat(data.Retail_Fee_Paint_Setup || 65) + (totalSqFt * parseFloat(data.Retail_Adder_Paint_SqFt || 20));
+
+    let routerFee = 0;
+    if (inputs.shape === 'Easy') routerFee = parseFloat(data.Retail_Fee_Router_Easy || 30);
+    else if (inputs.shape === 'Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard || 50);
+
+    let hwFee = 0;
+    if (inputs.standoffs) hwFee = (inputs.standoffQty || 4) * parseFloat(data.Retail_Price_Standoff || 8) * inputs.qty;
+
+    const feeDesign = inputs.incDesign ? parseFloat(data.Retail_Fee_Design || 45) : 0;
+    const feeSetupBase = parseFloat(data.Retail_Fee_Setup || 25);
+    const feeSetup = inputs.setupPerFile ? (feeSetupBase * (inputs.files||1)) : feeSetupBase;
+
+    const grandTotalRaw = retailPrint + paintFee + routerFee + hwFee + feeDesign + feeSetup;
+    const minOrder = parseFloat(data.Retail_Min_Order || 75);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    // Format UI Tiers for Simulator & Receipt
+    const simTiers = tierLog.map(t => {
+        const trPrint = (baseRate * (1 - t.d)) * totalSqFt;
+        const total = Math.max(trPrint + paintFee + routerFee + hwFee + feeDesign + feeSetup, minOrder);
+        return { q: t.q, base: baseRate * (1 - t.d), unit: total / t.q };
+    });
+
+    // --- 2. COST ENGINE (PHYSICS & BOM) ---
+    const sheetSqFt = 32;
+    const wastePct = parseFloat(data.Waste_Factor || 1.25);
+    const riskFactor = parseFloat(data.Factor_Risk || 1.10);
+    const attnRatio = parseFloat(data.Labor_Attendance_Ratio || 0.10);
+
+    // Substrate Cost
+    let costSubstrate = 0;
+    if (thk === '0.25') {
+        costSubstrate = inputs.color === 'White' ? parseFloat(data.Cost_Stock_14_4x8_W || 133.27) : parseFloat(data.Cost_Stock_14_4x8_C || 120.55);
+    } else if (thk === '0.5') {
+        costSubstrate = inputs.color === 'White' ? parseFloat(data.Cost_Stock_12_4x8_W || 294.24) : parseFloat(data.Cost_Stock_12_4x8_C || 277.01);
+    } else if (thk === '0.75') {
+        costSubstrate = inputs.color === 'White' ? parseFloat(data.Cost_Stock_34_4x8_W || 424.69) : parseFloat(data.Cost_Stock_34_4x8_C || 424.17);
+    } else {
+        costSubstrate = inputs.color === 'White' ? parseFloat(data.Cost_Stock_1IN_4x8_W || 541.76) : parseFloat(data.Cost_Stock_1IN_4x8_C || 496.71);
+    }
+
+    const sheetsNeeded = Math.ceil(totalSqFt / sheetSqFt);
+    const rawBlanks = sheetsNeeded * costSubstrate;
+    const wasteCost = rawBlanks * (wastePct - 1);
+
+    // Ink Cost
+    const inkCost = parseFloat(data.Cost_Ink_Latex || 0.16);
+    const totalInk = totalSqFt * inkCost * wastePct;
+
+    // Labor Rates
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateCNC = parseFloat(data.Rate_CNC_Labor || 25);
+    const rateMachFlatbed = parseFloat(data.Rate_Machine_Flatbed || 10);
+    const rateMachCNC = parseFloat(data.Rate_Machine_CNC || 10);
+
+    const costPrepressPrint = (parseFloat(data.Time_Prepress_Print || 10) / 60) * rateOp;
+    const costMachSetupPrint = (parseFloat(data.Time_Setup_Printer || 5) / 60) * rateOp;
+
+    let runHrs = 0;
+    if (inputs.method === 'direct_white') runHrs = totalSqFt / parseFloat(data.Speed_Print_White || 6);
+    else if (inputs.method === 'direct_3layer') runHrs = totalSqFt / parseFloat(data.Speed_Print_3Layer || 3.1);
+    else runHrs = totalSqFt / parseFloat(data.Speed_Print_1st || 18);
+
+    const costPrintMach = runHrs * rateMachFlatbed;
+    const costPrintLabor = runHrs * rateOp * attnRatio;
+
+    // Routing & Finishing
+    let costPrepressCNC = 0;
+    let costMachSetupCNC = 0;
+    let costCutMach = 0;
+    let costCutLabor = 0;
+
+    if (inputs.shape !== 'Rectangle') {
+        costPrepressCNC = (parseFloat(data.Time_Prepress_CNC || 15) / 60) * rateCNC;
+        costMachSetupCNC = (parseFloat(data.Time_Setup_CNC || 10) / 60) * rateCNC;
+        const cutMinsPerSqFt = inputs.shape === 'Easy' ? parseFloat(data.Time_CNC_Easy_SqFt || 1) : parseFloat(data.Time_CNC_Complex_SqFt || 2);
+        const cutHrs = (totalSqFt * cutMinsPerSqFt) / 60;
+        costCutMach = cutHrs * rateMachCNC;
+        costCutLabor = cutHrs * rateCNC * attnRatio;
+    } else {
+        const cutHrs = (totalSqFt * 0.5) / 60; // 30 sec per sqft shear equivalent
+        costCutLabor = cutHrs * rateOp;
+    }
+
+    let hwCost = 0;
+    if (inputs.standoffs) hwCost = (inputs.standoffQty || 4) * inputs.qty * parseFloat(data.Cost_Standoff || 2.54);
+
+    const rawSubTotal = rawBlanks + wasteCost + totalInk + costPrepressPrint + costMachSetupPrint + costPrintMach + costPrintLabor + costPrepressCNC + costMachSetupCNC + costCutMach + costCutLabor + hwCost;
+    const riskCost = rawSubTotal * (riskFactor - 1);
+    const totalCost = rawSubTotal + riskCost;
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            routerFee: routerFee,
+            paintTotal: paintFee,
+            hwTotal: hwFee,
+            setupFee: feeSetup,
+            designFee: feeDesign,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder,
+            baseRate: baseRate,
+            tiers: simTiers
+        },
+        cost: {
+            total: totalCost,
+            breakdown: {
+                rawSubstrate: rawBlanks,
+                rawInk: totalInk,
+                costPrepressPrint: costPrepressPrint,
+                costMachSetupPrint: costMachSetupPrint,
+                costPrintMach: costPrintMach,
+                costPrintLabor: costPrintLabor,
+                costPrepressCNC: costPrepressCNC,
+                costMachSetupCNC: costMachSetupCNC,
+                costCutMach: costCutMach,
+                costCutLabor: costCutLabor,
+                costHardware: hwCost,
+                wasteCost: wasteCost,
+                wastePct: (wastePct - 1) * 100,
+                riskCost: riskCost,
+                riskPct: (riskFactor - 1) * 100
+            }
+        }
+    };
+}
+
+// ==========================================
+// SIMULATOR CONFIGURATION SCHEMA
+// ==========================================
+window.ACRYLIC_CONFIG = {
+    tab: 'PROD_Acrylic_Signs',
+    engine: calculateAcrylic,
+    controls: [
+        { id: 'w', label: 'Width (in)', type: 'number', def: 24 },
+        { id: 'h', label: 'Height (in)', type: 'number', def: 18 },
+        { id: 'thickness', label: 'Thickness', type: 'select', opts: [{v:'0.25', t:'1/4"'}, {v:'0.5', t:'1/2"'}, {v:'0.75', t:'3/4"'}, {v:'1', t:'1"'}] },
+        { id: 'color', label: 'Acrylic Color', type: 'select', opts: [{v:'Clear', t:'Clear'}, {v:'White', t:'White'}, {v:'Black', t:'Black'}] },
+        { id: 'shape', label: 'Cut Type', type: 'select', opts: [{v:'Rectangle', t:'Square Cut'}, {v:'Easy', t:'CNC Simple'}, {v:'Complex', t:'CNC Complex'}] },
+        { id: 'method', label: 'Print Method', type: 'select', opts: [{v:'standard', t:'First Surface'}, {v:'direct_white', t:'Second Surface (Reverse)'}] },
+        { id: 'standoffs', label: 'Drill Holes/Hardware', type: 'toggle', def: false },
+        { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    dynamicUI: function(inputs) {
+        if (inputs.thickness !== '0.25' && inputs.color === 'Black') inputs.color = 'White';
+        return inputs;
+    },
+    retails: [
+        { heading: '1/4" Area Curves', key: 'ACR_14_T1_Max', label: 'T1 Max SqFt', tooltip: 'FORMAT: 10' },
+        { key: 'ACR_14_T1_Rate', label: 'T1 ($/sf)', tooltip: 'FORMAT: 40' },
+        { key: 'ACR_14_T2_Max', label: 'T2 Max SqFt' },
+        { key: 'ACR_14_T2_Rate', label: 'T2 ($/sf)' },
+        { key: 'ACR_14_T3_Rate', label: 'T3 (>20sf)' },
+        { heading: 'Multipliers & Adders', key: 'Retail_Adder_2ndSurf', label: 'Wht Ink Add ($/sf)' },
+        { key: 'Retail_Fee_Router_Easy', label: 'CNC Easy Fee' },
+        { key: 'Retail_Fee_Router_Hard', label: 'CNC Hard Fee' },
+        { key: 'Retail_Price_Standoff', label: 'Standoff ($/ea)' }
+    ],
+    costs: [
+        { heading: 'Acrylic Materials', key: 'Cost_Stock_14_4x8_C', label: '1/4" Clear ($)' },
+        { key: 'Cost_Stock_14_4x8_W', label: '1/4" White ($)' },
+        { key: 'Cost_Stock_12_4x8_C', label: '1/2" Clear ($)' },
+        { key: 'Cost_Stock_12_4x8_W', label: '1/2" White ($)' },
+        { key: 'Cost_Stock_34_4x8_C', label: '3/4" Clear ($)' },
+        { key: 'Cost_Stock_34_4x8_W', label: '3/4" White ($)' },
+        { key: 'Cost_Stock_1IN_4x8_C', label: '1" Clear ($)' },
+        { key: 'Cost_Stock_1IN_4x8_W', label: '1" White ($)' },
+        { heading: 'Machine Speeds', key: 'Speed_Print_1st', label: '1-Layer FB (LF/hr)' },
+        { key: 'Speed_Print_White', label: '2-Layer FB (LF/hr)' },
+        { heading: 'Labor Rates ($/Hr)', key: 'Rate_Operator', label: 'Print Op' },
+        { key: 'Rate_CNC_Labor', label: 'CNC Op' },
+        { heading: 'Labor & Setup (Mins)', key: 'Time_Prepress_Print', label: 'Print Prepress' },
+        { key: 'Time_Setup_Printer', label: 'Machine Load' },
+        { key: 'Time_Prepress_CNC', label: 'CNC Prepress' },
+        { key: 'Time_Setup_CNC', label: 'CNC Setup' },
+        { heading: 'Overhead & Factors', key: 'Rate_Machine_Flatbed', label: 'Flatbed ($/Hr)' },
+        { key: 'Rate_Machine_CNC', label: 'Router ($/Hr)' },
+        { key: 'Labor_Attendance_Ratio', label: 'Operator Attn (%)' },
+        { key: 'Waste_Factor', label: 'Waste Buffer' }
+    ],
+    renderReceipt: function(data, fmt) {
+        let retailHTML = `
+            <div>
+            <h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+            <div class="space-y-1 text-xs text-gray-700">
+            <div class="flex justify-between" title="Based on Area Curves + Layer Adders."><span class="cursor-help border-b border-dotted border-gray-400">Acrylic Base (Calculated @ ${fmt(data.retail.baseRate)}/sf):</span> <span>${fmt(data.retail.printTotal)}</span></div>
+            ${data.retail.routerFee > 0 ? `<div class="flex justify-between text-orange-700"><span>CNC Routing Fee:</span> <span>${fmt(data.retail.routerFee)}</span></div>` : ''}
+            ${data.retail.hwTotal > 0 ? `<div class="flex justify-between text-blue-600"><span>Hardware/Holes:</span> <span>${fmt(data.retail.hwTotal)}</span></div>` : ''}
+            ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+            <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+            </div>
+            </div>
+        `;
+        let costHTML = `
+            <div class="mt-6">
+            <h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+            <div class="space-y-1 text-xs text-gray-700">`;
+        if (data.cost.breakdown) {
+            const b = data.cost.breakdown;
+            costHTML += `
+            <div class="flex justify-between"><span class="border-b border-dotted border-gray-400">Acrylic Substrate:</span> <span>${fmt(b.rawSubstrate)}</span></div>
+            <div class="flex justify-between"><span class="border-b border-dotted border-gray-400">Ink Cost:</span> <span>${fmt(b.rawInk)}</span></div>
+            <div class="flex justify-between mt-1"><span class="border-b border-dotted border-gray-400">Print Prepress & Setup:</span> <span>${fmt(b.costPrepressPrint + b.costMachSetupPrint)}</span></div>
+            <div class="flex justify-between"><span class="border-b border-dotted border-gray-400">Flatbed Print Run:</span> <span>${fmt(b.costPrintMach + b.costPrintLabor)}</span></div>
+            ${b.costPrepressCNC > 0 ? `<div class="flex justify-between text-orange-800 mt-1"><span class="border-b border-dotted border-orange-300">CNC Toolpaths & Setup:</span> <span>${fmt(b.costPrepressCNC + b.costMachSetupCNC)}</span></div>` : ''}
+            <div class="flex justify-between text-orange-800"><span class="border-b border-dotted border-orange-300">Cutting Run:</span> <span>${fmt(b.costCutMach + b.costCutLabor)}</span></div>
+            ${b.costHardware > 0 ? `<div class="flex justify-between text-blue-600 mt-1"><span class="border-b border-dotted border-blue-300">Hardware Stock:</span> <span>${fmt(b.costHardware)}</span></div>` : ''}
+            <div class="border-t border-gray-200 mt-2 pt-1"></div>
+            <div class="flex justify-between text-red-600"><span class="border-b border-dotted border-red-400">Material Waste (${b.wastePct ? b.wastePct.toFixed(0) : 25}%):</span> <span>+ ${fmt(b.wasteCost)}</span></div>
+            <div class="flex justify-between text-orange-500 opacity-80"><span class="border-b border-dotted border-orange-300">Suggested Risk Buffer (${b.riskPct ? b.riskPct.toFixed(0) : 10}%):</span> <span>(+ ${fmt(b.riskCost)})</span></div>
+            `;
+        }
+        costHTML += `<div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div></div></div>`;
+        return retailHTML + costHTML;
+    }
+};
+
+
+========================================
+FILE: logic_wrap.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Vehicle Wraps
+ * Supports Extended Perf Models
+ */
+function calculateWrap(inputs, data) {
+    const retWrap = parseFloat(data.Retail_Price_Vehicle_SqFt) || 15.00;
+    const retPerfStd = parseFloat(data.Retail_Price_Perf_SqFt) || 12.00;
+    const retPerfDual = parseFloat(data.Retail_Price_PerfDual_SqFt) || 18.00;
+    const retInstall = parseFloat(data.Retail_Install_Vehicle_SqFt) || 5.00;
+
+    let totalRetailPrint = 0;
+    let totalInstallSqFt = 0;
+    let displaySqFt = 0;
+
+    inputs.panels.forEach(p => {
+        const sqft = (p.w * p.h) / 144;
+        const area = sqft * inputs.qty;
+        displaySqFt += area;
+
+        let retailUnit = 0;
+        
+        if (p.material.startsWith('perf')) {
+            if (p.included) {
+                retailUnit = 0;
+            } else {
+                retailUnit = p.material === 'perfdual' ? retPerfDual : retPerfStd;
+                totalInstallSqFt += area;
+            }
+        } else {
+            retailUnit = retWrap;
+            totalInstallSqFt += area;
+        }
+
+        totalRetailPrint += (retailUnit * area);
+    });
+
+    let discPct = 0;
+    if (inputs.qty >= (parseFloat(data.Tier_2_Qty) || 5)) discPct = parseFloat(data.Tier_2_Disc) || 0.10;
+    else if (inputs.qty >= (parseFloat(data.Tier_1_Qty) || 3)) discPct = parseFloat(data.Tier_1_Disc) || 0.05;
+
+    let appliedPrintRetail = totalRetailPrint * (1 - discPct);
+
+    let retailInstall = 0;
+    if (inputs.install === 'Yes') {
+        retailInstall = totalInstallSqFt * retInstall;
+    }
+
+    const minOrder = parseFloat(data.Retail_Min_Order) || 150;
+    let grandTotalRaw = appliedPrintRetail + retailInstall;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: appliedPrintRetail,
+            installTotal: retailInstall,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder,
+            displaySqFt: displaySqFt
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: cost_banner.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Vinyl Banners (v10.5)
+ * Uses Math.ceil() for Yield Bounding Boxes and dynamic fabrication constraints.
+ */
+function calculateBanner(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const totalSqFt = sqft * inputs.qty;
+    
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    // Yield Math: Round up to nearest foot
+    const minFt = Math.ceil(Math.min(inputs.w, inputs.h) / 12);
+    const maxFt = Math.ceil(Math.max(inputs.w, inputs.h) / 12);
+    const wStr = minFt < 10 ? `0${minFt}` : `${minFt}`;
+    const hStr = maxFt < 10 ? `0${maxFt}` : `${maxFt}`;
+    const sideStr = inputs.sides === 2 ? 'DS' : 'SS';
+    const blueKey = `RET_BAN_${wStr}${hStr}_${sideStr}`;
+
+    let baseRate = 0;
+    let matLabel = "13oz Scrim";
+    let retailPrint = 0;
+    let tierLog = [];
+
+    // Bounding Box Lookup
+    if (inputs.material === '13oz' && data[`${blueKey}_1`]) {
+        // MATCH: Apply Yield Envelope
+        const p1 = parseFloat(data[`${blueKey}_1`]);
+        const p10 = parseFloat(data[`${blueKey}_10`]);
+        const appliedBase = inputs.qty >= 10 ? p10 : p1;
+        
+        retailPrint = appliedBase * inputs.qty;
+        baseRate = p1 / sqft; // For display purposes
+        tierLog.push(
+            { q: 1, base: baseRate, d: 0, unitBase: p1 },
+            { q: 10, base: baseRate, d: 0, unitBase: p10 }
+        );
+    } else {
+        // NO MATCH: Oversize / Special Material Fallback
+        const minDim = Math.min(inputs.w, inputs.h);
+        if (inputs.material === '13oz') {
+            if (minDim <= 12) baseRate = parseFloat(data.BAN13_T1_Rate || 6.50);
+            else if (sqft < parseFloat(data.BAN13_T2_Max || 10)) baseRate = parseFloat(data.BAN13_T2_Rate || 6.00);
+            else baseRate = parseFloat(data.BAN13_T3_Rate || 5.00);
+        } else if (inputs.material === '15oz') {
+            matLabel = "15oz Smooth Blockout"; 
+            baseRate = parseFloat(data.Retail_Price_Base_15oz || 6.50);
+        } else if (inputs.material === '18oz') {
+            matLabel = "18oz Heavy Blockout"; 
+            baseRate = parseFloat(data.Retail_Price_Base_18oz || 8.00);
+        } else if (inputs.material === 'Mesh') {
+            matLabel = "8oz Mesh"; 
+            baseRate = parseFloat(data.Retail_Price_Base_Mesh || 7.00);
+        }
+
+        if (inputs.sides === 2) baseRate += parseFloat(data.Retail_Adder_DS_SqFt || 3.00);
+
+        let discPct = 0, currentBestTier = 0, i = 1;
+        while(data[`Tier_${i}_Qty`]) {
+            const tQty = parseFloat(data[`Tier_${i}_Qty`]);
+            const tDisc = parseFloat(data[`Tier_${i}_Disc`] || 0);
+            tierLog.push({ q: tQty, d: tDisc, unitBase: (baseRate * (1-tDisc)) * sqft });
+            if (inputs.qty >= tQty) currentBestTier = tDisc;
+            i++;
+        }
+        retailPrint = (baseRate * (1 - currentBestTier)) * totalSqFt;
+    }
+
+    // Finishing Adders
+    let retailPockets = 0;
+    if (inputs.pockets && inputs.pockets !== 'None') {
+        retailPockets = ((inputs.w / 12) * 2) * inputs.qty * parseFloat(data.Retail_Fin_PolePkt_LF || 3.00);
+    }
+    
+    let retailSlits = 0;
+    if (inputs.windSlits) retailSlits = totalSqFt * parseFloat(data.Retail_Price_WindSlits_SqFt || 1.00);
+
+    const feeDesign = inputs.incDesign ? parseFloat(data.Retail_Fee_Design || 45) : 0;
+    const feeSetup = inputs.setupPerFile ? (parseFloat(data.Retail_Fee_Setup || 15) * inputs.files) : parseFloat(data.Retail_Fee_Setup || 15);
+    const grandTotalRaw = retailPrint + retailPockets + retailSlits + feeDesign + feeSetup;
+    
+    const minOrder = data[`${blueKey}_1`] ? 0 : parseFloat(data.Retail_Min_Order || 50);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    // Format UI Tiers
+    const simTiers = tierLog.map(t => {
+        const trPrint = t.unitBase * t.q;
+        const trPocket = (inputs.pockets && inputs.pockets !== 'None') ? ((inputs.w/12)*2 * t.q * parseFloat(data.Retail_Fin_PolePkt_LF || 3)) : 0;
+        const trSlits = inputs.windSlits ? ((sqft * t.q) * parseFloat(data.Retail_Price_WindSlits_SqFt || 1)) : 0;
+        const total = Math.max(trPrint + trPocket + trSlits + feeSetup + feeDesign, minOrder);
+        return { q: t.q, base: baseRate * (1 - (t.d||0)), unit: total / t.q };
+    });
+
+    // ==========================================================
+    // DYNAMIC CONSTRAINT & FABRICATION MATH (Phase 4.5)
+    // ==========================================================
+    
+    // Extract physics constants from the backend payload
+    const maxRollWidth = parseFloat(data.Printer_Max_Roll_Width || 64);
+    const hemAllow = parseFloat(data.Allow_Hem_Inch || 1);
+    const pktMult = parseFloat(data.Allow_PolePkt_Mult || 3.14);
+
+    // 1. Calculate the dynamic maximum printable width
+    let dynamicMaxWidth = maxRollWidth;
+    if (inputs.hems) {
+        dynamicMaxWidth -= (hemAllow * 2); // 1" on each side = 2" total media lost
+    }
+    
+    if (inputs.pockets && inputs.pockets !== 'None') {
+        const pocketSize = inputs.pocketSize || 2; 
+        const pocketMediaLost = (pocketSize * pktMult) + (hemAllow * 2);
+        dynamicMaxWidth -= pocketMediaLost; 
+    }
+
+    // Set the flag if the requested size exceeds dynamic limits
+    const isOversize = Math.min(inputs.w, inputs.h) > dynamicMaxWidth;
+
+    // 2. Grommet Fabrication Rules
+    let perimLF = ((inputs.w + inputs.h) * 2) / 12 * inputs.qty;
+    let grommetPerimLF = perimLF;
+    
+    if (inputs.pockets === 'TopBottom') {
+        // Only the left and right vertical sides can receive grommets
+        grommetPerimLF = (inputs.h * 2) / 12 * inputs.qty; 
+    } else if (inputs.pockets === 'Top') {
+        // Exclude the top edge from grommet calculations
+        grommetPerimLF = (((inputs.h * 2) + inputs.w) / 12) * inputs.qty; 
+    }
+
+    // --- 2. COST ENGINE (PHYSICS & BOM) ---
+    const prodW = inputs.hems ? inputs.w + (hemAllow * 2) : inputs.w;
+    const prodH = inputs.hems ? inputs.h + (hemAllow * 2) : inputs.h;
+    const prodSqFt = (prodW * prodH) / 144;
+    const totalProdSqFt = prodSqFt * inputs.qty;
+
+    let costVinylRaw = 0;
+    if (inputs.material === '13oz') costVinylRaw = parseFloat(data.Cost_Media_13oz || 0.26);
+    else if (inputs.material === '15oz') costVinylRaw = parseFloat(data.Cost_Media_15oz || 0.46);
+    else if (inputs.material === '18oz') costVinylRaw = parseFloat(data.Cost_Media_18oz || 0.39);
+    else costVinylRaw = parseFloat(data.Cost_Media_Mesh || 0.33);
+
+    const wastePct = parseFloat(data.Waste_Factor || 1.15);
+    const costMedia = totalProdSqFt * costVinylRaw * wastePct;
+    const costInk = totalProdSqFt * parseFloat(data.Cost_Ink_Latex || 0.16) * inputs.sides;
+    
+    const costTape = inputs.hems ? (perimLF * parseFloat(data.Cost_Hem_Tape || 0.08)) * wastePct : 0;
+
+    let costGrom = 0, gromCount = 0;
+    if (inputs.grommets) {
+        gromCount = Math.max(Math.ceil(grommetPerimLF / 2), 4 * inputs.qty);
+        costGrom = gromCount * parseFloat(data.Cost_Grommet || 0.13) * wastePct;
+    }
+
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateShop = parseFloat(data.Rate_Shop_Labor || 20);
+    const costSetup = ((parseFloat(data.Time_Setup_Job || 15) + parseFloat(data.Time_Handling || 2)) / 60) * rateOp;
+
+    const printHrs = totalProdSqFt / parseFloat(data.Speed_Print_Roll || 150) * inputs.sides;
+    const costPrintOp = printHrs * rateOp * parseFloat(data.Labor_Attendance_Ratio || 0.10);
+    const costPrintMach = printHrs * parseFloat(data.Rate_Machine_Print || 5);
+
+    const finishHrs = ((inputs.hems ? perimLF * 0.5 : 0) + (inputs.grommets ? gromCount * 1.0 : 0) + (inputs.windSlits ? totalSqFt * 0.1 : 0) + (inputs.pockets && inputs.pockets !== 'None' ? (inputs.w/12)*2 * inputs.qty * 2 : 0) + (perimLF * 0.25)) / 60;
+    const costFinish = finishHrs * rateShop;
+
+    const subTotal = costMedia + costInk + costTape + costGrom + costSetup + costPrintOp + costPrintMach + costFinish;
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+
+    return {
+        retail: {
+            unitPrice: (retailPrint + retailPockets + retailSlits) / inputs.qty,
+            printTotal: retailPrint, pocketTotal: retailPockets, slitTotal: retailSlits,
+            setupFee: feeSetup, designFee: feeDesign, grandTotal: grandTotal, isMinApplied: grandTotalRaw < minOrder,
+            isOversize: isOversize, tiers: simTiers, baseRate: baseRate, matLabel: matLabel, yieldLabel: data[`${blueKey}_1`] ? `Yield Box: ${minFt}'x${maxFt}'` : "Area Curve"
+        },
+        cost: { 
+            total: subTotal * riskFactor, 
+            breakdown: { rawMedia: costMedia, unitMedia: costVinylRaw, rawInk: costInk, rawTape: costTape, rawGrom: costGrom, costSetup: costSetup, costPrint: costPrintOp + costPrintMach, costFinish: costFinish, riskCost: subTotal * (riskFactor - 1), wastePct: (wastePct - 1) * 100, riskPct: (riskFactor - 1) * 100 } 
+        },
+        metrics: { margin: (grandTotal - (subTotal * riskFactor)) / grandTotal }
+    };
+}
+
+// ==========================================
+// SIMULATOR CONFIGURATION SCHEMA
+// ==========================================
+window.BANNER_CONFIG = {
+    tab: 'PROD_Vinyl_Banners',
+    engine: calculateBanner,
+    controls: [
+        { id: 'w', label: 'Width (in)', type: 'number', def: 72 },
+        { id: 'h', label: 'Height (in)', type: 'number', def: 36 },
+        { id: 'material', label: 'Material', type: 'select', opts: [{v:'13oz', t:'13oz Standard'}, {v:'15oz', t:'15oz Blockout'}, {v:'18oz', t:'18oz Heavy'}, {v:'Mesh', t:'8oz Mesh'}] },
+        { id: 'sides', label: 'Print Sides', type: 'select', opts: [{v:1, t:'1-Sided'}, {v:2, t:'2-Sided'}] },
+        { id: 'hems', label: 'Tape Hems', type: 'toggle', def: true },
+        { id: 'grommets', label: 'Grommets', type: 'toggle', def: true },
+        { id: 'pockets', label: 'Pole Pockets', type: 'select', opts: [{v:'None', t:'None'}, {v:'Top', t:'Top Only'}, {v:'TopBottom', t:'Top & Bottom'}] },
+        { id: 'windSlits', label: 'Wind Slits', type: 'toggle', def: false },
+        { id: 'files', label: 'Files', type: 'number', def: 1 },
+        { id: 'setupPerFile', label: 'Setup / File', type: 'toggle', def: false },
+        { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    retails: [
+        { heading: 'Material Tiers ($/SqFt)', key: 'BAN13_T1_Rate', label: '13oz Rate (1ft Tall)' },
+        { key: 'BAN13_T2_Rate', label: '13oz Rate (<10sf)' },
+        { key: 'BAN13_T3_Rate', label: '13oz Rate (>10sf)' },
+        { key: 'Retail_Price_Base_15oz', label: '15oz Rate ($)' },
+        { key: 'Retail_Price_Base_18oz', label: '18oz Rate ($)' },
+        { key: 'Retail_Price_Base_Mesh', label: 'Mesh Rate ($)' },
+        { heading: 'Adders & Finishings', key: 'Retail_Adder_DS_SqFt', label: 'Double Sided ($/sf)' },
+        { key: 'Retail_Fin_PolePkt_LF', label: 'Pole Pocket ($/LF)' },
+        { key: 'Retail_Price_WindSlits_SqFt', label: 'Wind Slits ($/sf)' },
+        { heading: 'Volume Discounts', key: 'Tier_1_Qty', label: 'T1 Trigger (Qty)' },
+        { key: 'Tier_1_Disc', label: 'T1 Discount (%)' }
+    ],
+    costs: [
+        { heading: 'Roll Media', key: 'Cost_Media_13oz', label: '13oz Vinyl ($/sf)' },
+        { key: 'Cost_Media_15oz', label: '15oz Blockout ($/sf)' },
+        { key: 'Cost_Media_18oz', label: '18oz Heavy ($/sf)' },
+        { key: 'Cost_Media_Mesh', label: '8oz Mesh ($/sf)' },
+        { heading: 'Fabrication Math', key: 'Printer_Max_Roll_Width', label: 'Max Media Width' },
+        { key: 'Allow_Hem_Inch', label: 'Hem Allowance (in)' },
+        { key: 'Allow_PolePkt_Mult', label: 'Pkt Mult (Pi)' },
+        { heading: 'Finishings & Ink', key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+        { key: 'Cost_Grommet', label: 'Grommet ($/ea)' },
+        { key: 'Cost_Hem_Tape', label: 'Hem Tape ($/LF)' },
+        { heading: 'Machine Speeds & Time', key: 'Speed_Print_Roll', label: 'Print Spd (SqFt/hr)' },
+        { key: 'Time_Setup_Job', label: 'Setup Job (Mins)' },
+        { key: 'Time_Handling', label: 'Handling (Mins)' },
+        { key: 'Time_Hem_LF', label: 'Hemming (Mins/LF)' },
+        { key: 'Time_PolePkt_LF', label: 'Pockets (Mins/LF)' },
+        { heading: 'Rates & Overhead', key: 'Rate_Operator', label: 'Print Op ($/Hr)' },
+        { key: 'Rate_Shop_Labor', label: 'Shop Labor ($/Hr)' },
+        { key: 'Rate_Machine_Print', label: 'Printer Mach ($/Hr)' },
+        { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' },
+        { key: 'Waste_Factor', label: 'Waste Buffer' }
+    ],
+    renderReceipt: function(data, fmt) {
+        let retailHTML = `<div><h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+        <div class="space-y-1 text-xs text-gray-700">
+        <div class="flex justify-between"><span>Base Print:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+        ${data.retail.pocketTotal > 0 ? `<div class="flex justify-between text-orange-700"><span>Pole Pockets:</span> <span>${fmt(data.retail.pocketTotal)}</span></div>` : ''}
+        ${data.retail.slitTotal > 0 ? `<div class="flex justify-between text-teal-700"><span>Wind Slits:</span> <span>${fmt(data.retail.slitTotal)}</span></div>` : ''}
+        <div class="flex justify-between"><span>Setup Fee:</span> <span>${fmt(data.retail.setupFee || 0)}</span></div>
+        ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+        <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+        </div></div>`;
+
+        let costHTML = `<div class="mt-6"><h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+        <div class="space-y-1 text-xs text-gray-700">`;
+
+        if (data.cost.breakdown) {
+            const b = data.cost.breakdown;
+            costHTML += `
+            <div class="flex justify-between"><span>Roll Material:</span> <span>${fmt(b.rawMedia)}</span></div>
+            <div class="flex justify-between"><span>Ink:</span> <span>${fmt(b.rawInk)}</span></div>
+            ${b.rawTape > 0 ? `<div class="flex justify-between"><span>Hem Tape:</span> <span>${fmt(b.rawTape)}</span></div>` : ''}
+            ${b.rawGrom > 0 ? `<div class="flex justify-between"><span>Grommets:</span> <span>${fmt(b.rawGrom)}</span></div>` : ''}
+            <div class="flex justify-between"><span>Setup Labor:</span> <span>${fmt(b.costSetup)}</span></div>
+            <div class="flex justify-between"><span>Print Run:</span> <span>${fmt(b.costPrint)}</span></div>
+            <div class="flex justify-between"><span>Finishing Labor:</span> <span>${fmt(b.costFinish)}</span></div>
+            <div class="border-t border-gray-200 mt-2 pt-1"></div>
+            <div class="flex justify-between text-red-600"><span>Material Waste (${b.wastePct ? b.wastePct.toFixed(0) : 15}%):</span> <span>(Calculated Above)</span></div>
+            <div class="flex justify-between text-orange-500 opacity-80"><span>Suggested Risk Buffer (${b.riskPct ? b.riskPct.toFixed(0) : 5}%):</span> <span>(+ ${fmt(b.riskCost)})</span></div>`;
+        }
+
+        costHTML += `<div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div></div></div>`;
+        return retailHTML + costHTML;
+    }
+};
+
+
+========================================
+FILE: cost_wrap.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Vehicle Wraps (v4.2)
+ * Handles dynamic panel arrays, Line Item Qty, Window Perf inclusion, and seaming.
+ */
+
+function calculateWrap(inputs, data) {
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    const retWrap = parseFloat(data.Retail_Price_Wrap_SqFt || 15);
+    const retPerf = parseFloat(data.Retail_Price_Perf_SqFt || 12);
+    const retDecal = parseFloat(data.Retail_Price_Decal_SqFt || 14);
+    
+    let totalRetailPrint = 0;
+    let totalSqFt = 0;
+    let totalInstallSqFt = 0;
+    let panelLogs = [];
+
+    // Loop through dynamic panels
+    inputs.panels.forEach(p => {
+        const sqft = (p.w * p.h) / 144;
+        const lineQty = p.qty || 1;
+        const area = sqft * lineQty * inputs.qty; // Area = (Panel SqFt) x (Line Qty) x (Fleet Qty)
+        totalSqFt += area;
+
+        // Seam Math (52" Max with 1" Overlap)
+        const shortEdge = Math.min(p.w, p.h);
+        const panelCount = (shortEdge <= 52 ? 1 : Math.ceil((shortEdge - 1) / 51)) * lineQty;
+
+        let retailUnit = 0;
+        if (p.material === 'wrap') {
+            retailUnit = retWrap;
+            totalInstallSqFt += area;
+        } else if (p.material === 'perf') {
+            retailUnit = p.included ? 0 : retPerf;
+            totalInstallSqFt += area;
+        } else if (p.material === 'decal') {
+            retailUnit = retDecal;
+            totalInstallSqFt += area * 0.5; // Spot graphics install faster
+        }
+
+        const rowRetail = retailUnit * area;
+        totalRetailPrint += rowRetail;
+
+        panelLogs.push({ 
+            label: p.label || 'Section', 
+            material: p.material,
+            qty: lineQty,
+            w: p.w, h: p.h,
+            sqft: area, 
+            retail: rowRetail, 
+            panels: panelCount,
+            included: p.included
+        });
+    });
+
+    // Install Retail
+    const isComplex = inputs.complexity === 'complex';
+    const baseInstallRet = parseFloat(data.Retail_Price_Install_Simple || 5);
+    const complexMult = parseFloat(data.Retail_Mult_Complex || 2.5);
+    const installRetRate = isComplex ? (baseInstallRet * complexMult) : baseInstallRet;
+    const totalInstallRetail = totalInstallSqFt * installRetRate;
+
+    // Fees & Discounts
+    let appliedPrintRetail = totalRetailPrint;
+    let i = 1;
+    const tierLog = [];
+    while (data[`Tier_${i}_Qty`]) {
+        const tQty = parseFloat(data[`Tier_${i}_Qty`]);
+        const tDisc = parseFloat(data[`Tier_${i}_Disc`] || 0);
+        let discountedPrint = totalRetailPrint * (1 - tDisc);
+        if (inputs.qty >= tQty) appliedPrintRetail = discountedPrint;
+        tierLog.push({ q: tQty, base: totalRetailPrint, unit: discountedPrint, pct: tDisc });
+        i++;
+    }
+
+    const feeDesign = inputs.incDesign ? (parseFloat(data.Retail_Fee_Design || 85) * inputs.files) : 0;
+    const grandTotalRaw = appliedPrintRetail + totalInstallRetail + feeDesign;
+    const minOrder = parseFloat(data.Retail_Min_Order || 150);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    // --- 2. COST ENGINE (PHYSICS & BOM) ---
+    const costCast = parseFloat(data.Cost_Vin_Vehicle || 1.30);
+    const costCastLam = parseFloat(data.Cost_Lam_Vehicle || 0.96);
+    const costPerf = parseFloat(data.Cost_Vinyl_Perf || 0.65);
+    const costPerfLam = parseFloat(data.Cost_Lam_Perf || 0.25);
+    const inkCost = parseFloat(data.Cost_Ink_Latex || 0.16);
+    
+    const waste = parseFloat(data.Waste_Factor || 1.25);
+    const risk = parseFloat(data.Factor_Risk || 1.10);
+
+    let totalCostMat = 0;
+    
+    inputs.panels.forEach(p => {
+        const lineQty = p.qty || 1;
+        const area = ((p.w * p.h) / 144) * lineQty * inputs.qty;
+        let matUnit = 0;
+        if (p.material === 'wrap' || p.material === 'decal') matUnit = costCast + costCastLam;
+        if (p.material === 'perf') matUnit = costPerf + costPerfLam; 
+        
+        totalCostMat += (matUnit * area * waste);
+    });
+
+    const totalCostInk = totalSqFt * inkCost * waste;
+
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateInstall = parseFloat(data.Rate_Install || 32);
+    const rateMach = parseFloat(data.Rate_Machine_Print || 5);
+    const attnRatio = parseFloat(data.Labor_Attendance_Ratio || 0.10);
+
+    const speedPrint = parseFloat(data.Speed_Print_Roll || 150);
+    const speedLam = parseFloat(data.Speed_Lam_Roll || 300);
+    const speedInstallBase = parseFloat(data.Speed_Install_Vehicle || 10);
+    const speedInstall = isComplex ? (speedInstallBase * 0.5) : speedInstallBase;
+
+    const printHrs = totalSqFt / speedPrint;
+    const lamHrs = totalSqFt / speedLam;
+    const installHrs = totalInstallSqFt / speedInstall;
+
+    const costPrintOp = (printHrs + lamHrs) * rateOp * attnRatio;
+    const costInstallLabor = installHrs * rateInstall;
+    const costMach = (printHrs + lamHrs) * rateMach;
+
+    const rawSubTotal = totalCostMat + totalCostInk + costPrintOp + costInstallLabor + costMach;
+    const riskCost = rawSubTotal * (risk - 1);
+    const totalCost = rawSubTotal + riskCost;
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: appliedPrintRetail,
+            installTotal: totalInstallRetail,
+            designFee: feeDesign,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder,
+            panels: panelLogs,
+            tiers: tierLog
+        },
+        cost: {
+            total: totalCost,
+            breakdown: { materials: totalCostMat, ink: totalCostInk, printLabor: costPrintOp, installLabor: costInstallLabor, machine: costMach, risk: riskCost }
+        }
+    };
+}
+
+window.WRAP_CONFIG = {
+    tab: 'PROD_Vinyl_Wraps',
+    engine: calculateWrap,
+    controls: [
+        { id: 'w', label: 'Simulated Width', type: 'number', def: 120 },
+        { id: 'h', label: 'Simulated Height', type: 'number', def: 60 },
+        { id: 'material', label: 'Material', type: 'select', opts: [{v:'wrap', t:'Cast Wrap'}, {v:'perf', t:'Window Perf'}, {v:'decal', t:'Spot Decal'}] },
+        { id: 'complexity', label: 'Vehicle Type', type: 'select', opts: [{v:'simple', t:'Flat / Box Truck'}, {v:'complex', t:'Complex / Van'}] },
+        { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    dynamicUI: function(inputs) {
+        inputs.panels = [{ label: "Simulated Panel", qty: 1, w: inputs.w, h: inputs.h, material: inputs.material, included: false }];
+        return inputs;
+    },
+    retails: [
+        { heading: 'Market Base ($/SqFt)', key: 'Retail_Price_Wrap_SqFt', label: 'Wrap Cast Rate ($)' },
+        { key: 'Retail_Price_Perf_SqFt', label: 'Window Perf Rate ($)' },
+        { key: 'Retail_Price_Decal_SqFt', label: 'Spot Decal Rate ($)' },
+        { heading: 'Installation Matrix', key: 'Retail_Price_Install_Simple', label: 'Base Install ($/SqFt)' },
+        { key: 'Retail_Mult_Complex', label: 'Complex Curve Mult (1.x)' },
+        { heading: 'Flat Fees', key: 'Retail_Fee_Design', label: 'Design Fee ($)' }
+    ],
+    costs: [
+        { heading: 'Raw Materials', key: 'Cost_Vin_Vehicle', label: 'Cast Vinyl ($/SqFt)' },
+        { key: 'Cost_Lam_Vehicle', label: 'Cast Lam ($/SqFt)' },
+        { key: 'Cost_Vinyl_Perf', label: 'Perf Vinyl ($/SqFt)' },
+        { key: 'Cost_Lam_Perf', label: 'Optic Clear Lam ($/SqFt)' },
+        { key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+        { heading: 'Labor & Speeds', key: 'Rate_Operator', label: 'Operator ($/Hr)' },
+        { key: 'Rate_Install', label: 'Installer ($/Hr)' },
+        { key: 'Rate_Machine_Print', label: 'Printer Mach ($/Hr)' },
+        { key: 'Speed_Print_Roll', label: 'Print Spd (SqFt/hr)' },
+        { key: 'Speed_Lam_Roll', label: 'Lam Spd (SqFt/hr)' },
+        { key: 'Speed_Install_Vehicle', label: 'Install Spd (SqFt/hr)' },
+        { heading: 'Modifiers', key: 'Waste_Factor', label: 'Waste (1.x)' },
+        { key: 'Factor_Risk', label: 'Risk (1.x)' },
+        { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' }
+    ],
+    renderReceipt: function(data, fmt) {
+        return `
+            <div>
+                <h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+                <div class="space-y-1 text-xs text-gray-700">
+                    <div class="flex justify-between"><span>Printed Graphics:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+                    <div class="flex justify-between"><span>Installation:</span> <span>${fmt(data.retail.installTotal)}</span></div>
+                    ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+                    <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+                </div>
+            </div>
+            <div class="mt-6">
+                <h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+                <div class="space-y-1 text-xs text-gray-700">
+                    <div class="flex justify-between"><span>Vinyl + Lam + Waste:</span> <span>${fmt(data.cost.breakdown.materials)}</span></div>
+                    <div class="flex justify-between"><span>Ink Usage:</span> <span>${fmt(data.cost.breakdown.ink)}</span></div>
+                    <div class="flex justify-between"><span>Print Labor:</span> <span>${fmt(data.cost.breakdown.printLabor)}</span></div>
+                    <div class="flex justify-between"><span>Machine Time:</span> <span>${fmt(data.cost.breakdown.machine)}</span></div>
+                    <div class="flex justify-between text-blue-600 font-bold border-t border-gray-100 pt-1 mt-1"><span>Installation Labor:</span> <span>${fmt(data.cost.breakdown.installLabor)}</span></div>
+                    <div class="flex justify-between text-orange-500 opacity-80 border-t border-gray-100 pt-1 mt-1"><span>Risk Buffer:</span> <span>(+ ${fmt(data.cost.breakdown.risk)})</span></div>
+                    <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div>
+                </div>
+            </div>
+        `;
+    }
+};
+
+
+========================================
+FILE: logic_pvc.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: PVC Signs
+ * Pure Area-Curve Lookup Math + Laminate Deductions
+ */
+function calculatePVC(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    let baseRate = 0;
+    let minSignPrice = 0;
+
+    // 1. Fixed Area Curve Lookup
+    if (inputs.thickness === '3mm') {
+        if (sqft <= (parseFloat(data.PVC3_T1_Max) || 2.99)) { 
+            baseRate = parseFloat(data.PVC3_T1_Rate) || 44; 
+            minSignPrice = parseFloat(data.PVC3_T1_Min) || 33; 
+        }
+        else if (sqft <= (parseFloat(data.PVC3_T2_Max) || 5.99)) baseRate = parseFloat(data.PVC3_T2_Rate) || 13.2;
+        else if (sqft <= (parseFloat(data.PVC3_T3_Max) || 11.99)) baseRate = parseFloat(data.PVC3_T3_Rate) || 8.4;
+        else baseRate = parseFloat(data.PVC3_T4_Rate) || 7.8;
+    } else {
+        if (sqft <= (parseFloat(data.PVC6_T1_Max) || 2.99)) { 
+            baseRate = parseFloat(data.PVC6_T1_Rate) || 44; 
+            minSignPrice = parseFloat(data.PVC6_T1_Min) || 33; 
+        }
+        else if (sqft <= (parseFloat(data.PVC6_T2_Max) || 5.99)) baseRate = parseFloat(data.PVC6_T2_Rate) || 22;
+        else if (sqft <= (parseFloat(data.PVC6_T3_Max) || 11.99)) baseRate = parseFloat(data.PVC6_T3_Rate) || 14;
+        else baseRate = parseFloat(data.PVC6_T4_Rate) || 13;
+    }
+
+    // Evaluate base per-sign print price
+    let unitPrint = baseRate * sqft;
+    if (unitPrint < minSignPrice) unitPrint = minSignPrice;
+
+    // 2. Double Sided Adder (+50%)
+    if (inputs.sides === 2) {
+        unitPrint *= (1 + (parseFloat(data.Retail_Adder_DS_Mult) || 0.5));
+    }
+
+    // 3. No Laminate Deduction (-10%)
+    if (inputs.laminate === 'None') {
+        unitPrint *= (1 - (parseFloat(data.Retail_Lam_Deduct) || 0.1));
+    }
+
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 4. Volume Discount (10+ Qty Break)
+    if (inputs.qty >= (parseFloat(data.Tier_1_Qty) || 10)) {
+        retailPrint *= (1 - (parseFloat(data.Tier_1_Disc) || 0.05));
+    }
+
+    // 5. Router Fee
+    let routerFee = 0;
+    if (inputs.shape === 'CNC Simple') routerFee = parseFloat(data.Retail_Fee_Router_Easy) || 30;
+    else if (inputs.shape === 'CNC Complex' || inputs.shape === 'Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard) || 50;
+
+    // 6. Shop Minimum Guard
+    const minOrder = parseFloat(data.Retail_Min_Order) || 50;
+    let grandTotalRaw = retailPrint + routerFee;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            routerFee: routerFee,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: logic_viewer.js
+========================================
+/**
+ * SignOS Log Analyzer Logic (v2.25)
+ * Feature: Auto-loads 'Active Session' logs by default (Live Injection).
+ * Includes: Safety check for search filter to prevent crashes if UI is missing.
+ */
+
+let rawData = [];
+let displayData = [];
+let currentSort = { key: 'time', dir: 'desc' };
+let activeFilters = { users: [], roles: [], actions: [], targets: [], ips: [] };
+
+// --- HELPER: FIND TABLE BODY ---
+function getTableBody() {
+    return document.getElementById('table-body') || document.getElementById('log-body');
+}
+
+// --- INIT ---
+window.onload = function() {
+    const u = sessionStorage.getItem('signos_user');
+    
+    if(document.getElementById('auth-user')) {
+        document.getElementById('auth-user').innerText = u || "GUEST";
+    }
+    
+    // Local File Loader
+    const fileInput = document.getElementById('file-input');
+    if(fileInput) {
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0]; 
+            if (!file) return;
+            
+            document.getElementById('current-file-name').innerText = "Local: " + file.name;
+            const reader = new FileReader();
+            reader.onload = (e) => parseLogs(e.target.result);
+            reader.readAsText(file);
+        });
+    }
+
+    loadArchiveList();
+};
+
+function goBack() { window.history.back(); }
+
+// --- API FETCHING ---
+
+async function loadArchiveList() {
+    const list = document.getElementById('archive-list');
+    if(!list) return;
+    
+    list.innerHTML = '<div class="text-center py-4"><div class="w-4 h-4 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto"></div></div>';
+
+    try {
+        const response = await fetch(`${SCRIPT_URL}?req=get_archive_index`);
+        let data = await response.json();
+        
+        if (!data) data = [];
+
+        // --- NEW: INJECT LIVE OPTION AT TOP ---
+        const liveItem = { 
+            date: "NOW", 
+            name: "⚡ Active Session Logs", 
+            type: "LIVE", 
+            count: "Live", 
+            file_id: "LIVE" 
+        };
+        
+        // Force Live Item to the top of the array (Index 0)
+        data.unshift(liveItem);
+        // -------------------------------
+
+        list.innerHTML = ""; 
+
+        data.forEach((item, index) => {
+            const div = document.createElement('div');
+            // Highlight the first item (Live) by default
+            div.className = `archive-item p-3 border-b border-gray-100 cursor-pointer hover:bg-blue-50 transition ${index === 0 ? 'active' : ''}`;
+            
+            div.onclick = () => loadLogContent(item, div);
+            
+            // Custom badge for Live vs Archive
+            const badgeClass = item.type === 'LIVE' 
+                ? 'bg-green-100 text-green-600 border-green-200' 
+                : (item.type === 'AUTO' ? 'bg-gray-100 text-gray-500' : 'bg-purple-100 text-purple-600');
+
+            div.innerHTML = `
+                <div class="flex justify-between items-center mb-1">
+                    <span class="font-bold text-xs text-gray-700">${item.date}</span>
+                    <span class="text-[9px] px-1.5 py-0.5 rounded border ${badgeClass}">${item.type}</span>
+                </div>
+                <div class="text-[10px] text-gray-400 truncate">${item.name}</div>
+                <div class="text-[9px] text-gray-300 mt-1">${item.count || '0'} rows</div>
+            `;
+            list.appendChild(div);
+        });
+
+        // Auto-load the first item (which is now LIVE)
+        if(data.length > 0) loadLogContent(data[0], list.firstChild);
+
+    } catch (e) {
+        console.error(e);
+        list.innerHTML = `<div class="text-xs text-red-500 text-center py-4">Error loading index</div>`;
+    }
+}
+
+async function loadLogContent(item, element) {
+    document.querySelectorAll('.archive-item').forEach(el => el.classList.remove('active'));
+    if(element) element.classList.add('active');
+    
+    document.getElementById('current-file-name').innerText = item.name;
+    
+    const tbody = getTableBody();
+    if(tbody) tbody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-gray-400">Loading data...</td></tr>';
+
+    try {
+        let content = "";
+        
+        // CHECK IF LIVE REQUEST
+        if (item.type === "LIVE" || (item.file_id && item.file_id === "LIVE")) {
+             const res = await fetch(`${SCRIPT_URL}?req=get_live_logs`);
+             const json = await res.json();
+             if(json.status === "success") {
+                 parseLiveArray(json.logs);
+                 return;
+             }
+        } else {
+            // ARCHIVE REQUEST
+            const response = await fetch(`${SCRIPT_URL}?req=get_log_content&file_id=${item.file_id}`);
+            const data = await response.json();
+            content = data.content;
+        }
+
+        if (content) parseLogs(content);
+
+    } catch (e) {
+        console.error(e);
+        if(tbody) tbody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-red-400">Failed to load logs.</td></tr>';
+    }
+}
+
+// --- PARSING ENGINE ---
+
+function parseLiveArray(data) {
+    const tbody = getTableBody();
+    if(!data || data.length < 2) {
+        if(tbody) tbody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-gray-400">No active logs found today.</td></tr>';
+        return;
+    }
+    
+    const rows = data.slice(1); // Skip Header
+    
+    rawData = rows.map(r => ({
+        time: r[0] ? new Date(r[0]).toLocaleString() : "N/A",
+        ip: r[1],
+        user: r[2],
+        role: r[3],
+        action: r[4],
+        target: r[5],
+        meta: r[6]
+    }));
+    
+    populateFilters();
+    applyFilters();
+}
+
+function parseLogs(content) {
+    if (!content) return;
+
+    let lines = content.split('\n').filter(l => l.trim() !== "");
+
+    // 1. FILTER GARBAGE
+    lines = lines.filter(l => !l.startsWith("===="));
+
+    // 2. REMOVE HEADER
+    if (lines.length > 0 && lines[0].startsWith("Timestamp")) {
+        lines.shift();
+    }
+
+    const tbody = getTableBody();
+    if(lines.length === 0) {
+        if(tbody) tbody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-gray-400">Log file is empty.</td></tr>';
+        return;
+    }
+
+    // 3. DETECT DELIMITER
+    const firstLine = lines[0];
+    const separator = firstLine.includes(" | ") ? " | " : ",";
+
+    rawData = lines.map(line => {
+        let parts;
+        if (separator === ",") {
+             parts = line.split(",");
+        } else {
+             parts = line.split(" | ");
+        }
+
+        if (parts.length < 5) return null;
+
+        return {
+            time: parts[0] || "N/A",
+            ip: parts[1] || "Unknown",
+            user: parts[2] || "Guest",
+            role: parts[3] || "N/A",
+            action: parts[4] || "VIEW",
+            target: parts[5] || "N/A",
+            meta: parts.slice(6).join(separator) || "{}"
+        };
+    }).filter(x => x); 
+
+    populateFilters();
+    applyFilters();
+}
+
+// --- SCANNER & FILTERS ---
+
+function populateFilters() {
+    const getUnique = (key) => [...new Set(rawData.map(item => item[key]))].sort();
+
+    renderFilterChips('filter-users', getUnique('user'), 'users');
+    renderFilterChips('filter-roles', getUnique('role'), 'roles');
+    renderFilterChips('filter-actions', getUnique('action'), 'actions');
+    renderFilterChips('filter-targets', getUnique('target'), 'targets');
+    renderFilterChips('filter-ips', getUnique('ip'), 'ips');
+}
+
+function renderFilterChips(containerId, values, filterKey) {
+    const container = document.getElementById(containerId);
+    if (!container) return; 
+
+    container.innerHTML = '';
+    values.forEach(val => {
+        const btn = document.createElement('button');
+        btn.innerText = val;
+        btn.className = "filter-chip bg-slate-50 border border-slate-200 text-slate-600 px-2 py-1 rounded text-[10px] font-bold mr-2 mb-2 hover:bg-blue-50";
+        
+        btn.onclick = () => {
+            const idx = activeFilters[filterKey].indexOf(val);
+            if (idx > -1) {
+                activeFilters[filterKey].splice(idx, 1);
+                btn.classList.remove('bg-blue-600', 'text-white');
+                btn.classList.add('bg-slate-50', 'text-slate-600');
+            } else {
+                activeFilters[filterKey].push(val);
+                btn.classList.remove('bg-slate-50', 'text-slate-600');
+                btn.classList.add('bg-blue-600', 'text-white');
+            }
+            applyFilters();
+        };
+        container.appendChild(btn);
+    });
+}
+
+// --- SORTING & RENDERING ---
+
+function setSort(key) {
+    if (currentSort.key === key) {
+        currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+        currentSort.key = key;
+        currentSort.dir = 'asc';
+    }
+    applyFilters();
+}
+
+function applyFilters() {
+    // Search Filter Safety Check
+    const searchInput = document.getElementById('filter-search');
+    const search = searchInput ? searchInput.value.toLowerCase() : "";
+
+    displayData = rawData.filter(row => {
+        const matchUser = activeFilters.users.length === 0 || activeFilters.users.includes(row.user);
+        const matchRole = activeFilters.roles.length === 0 || activeFilters.roles.includes(row.role);
+        const matchAction = activeFilters.actions.length === 0 || activeFilters.actions.includes(row.action);
+        const matchTarget = activeFilters.targets.length === 0 || activeFilters.targets.includes(row.target);
+        const matchIp = activeFilters.ips.length === 0 || activeFilters.ips.includes(row.ip);
+        
+        const matchSearch = !search || JSON.stringify(row).toLowerCase().includes(search);
+        
+        return matchUser && matchRole && matchAction && matchTarget && matchIp && matchSearch;
+    });
+
+    // Sort
+    displayData.sort((a, b) => {
+        let valA = a[currentSort.key];
+        let valB = b[currentSort.key];
+
+        if (currentSort.key === 'time') {
+            valA = new Date(valA);
+            valB = new Date(valB);
+        } else {
+            valA = String(valA).toLowerCase();
+            valB = String(valB).toLowerCase();
+        }
+
+        if (valA < valB) return currentSort.dir === 'asc' ? -1 : 1;
+        if (valA > valB) return currentSort.dir === 'asc' ? 1 : -1;
+        return 0;
+    });
+
+    renderTable();
+}
+
+function renderTable() {
+    const tbody = getTableBody();
+    if(!tbody) return;
+    
+    tbody.innerHTML = '';
+
+    if (displayData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-gray-400">No matching records found.</td></tr>';
+        return;
+    }
+
+    displayData.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.className = "log-row border-b border-gray-50";
+        tr.onclick = () => openModal(row);
+
+        if (row.action.includes('ORDER') || row.action.includes('SUBMIT')) tr.classList.add('log-checkout');
+        if (row.user === 'GUEST' && row.action.includes('AUTH')) tr.classList.add('log-error');
+        if (row.action.includes('AUTH') && row.role !== 'N/A') tr.classList.add('log-auth');
+
+        let metaShort = row.meta;
+        if(metaShort && metaShort.length > 50) metaShort = metaShort.substring(0, 47) + "...";
+        
+        const cell = (val) => `<span class="hover:text-blue-600 font-medium">${val}</span>`;
+
+        tr.innerHTML = `
+            <td class="p-3 text-gray-600 whitespace-nowrap text-xs">${cell(row.time)}</td>
+            <td class="p-3 font-bold text-gray-800 text-xs">${row.user}</td>
+            <td class="p-3"><span class="bg-gray-100 text-[10px] px-1.5 py-0.5 rounded font-bold text-gray-600">${row.role}</span></td>
+            <td class="p-3 font-bold text-xs whitespace-nowrap"><span class="text-blue-600">${row.action}</span></td>
+            <td class="p-3 text-gray-500 text-xs whitespace-nowrap">${cell(row.target)}</td>
+            <td class="p-3 text-gray-400 font-mono text-[10px] whitespace-nowrap">${cell(row.ip)}</td>
+            <td class="p-3 text-gray-400 font-mono text-[9px] truncate max-w-xs hover:text-gray-600 transition" title='${row.meta}'>${metaShort}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+// --- MODAL LOGIC ---
+
+function openModal(row) {
+    if(document.getElementById('m-time')) document.getElementById('m-time').innerText = row.time;
+    if(document.getElementById('m-ip')) document.getElementById('m-ip').innerText = row.ip;
+    if(document.getElementById('m-user')) document.getElementById('m-user').innerText = row.user;
+    if(document.getElementById('m-role')) document.getElementById('m-role').innerText = row.role;
+    if(document.getElementById('m-action')) document.getElementById('m-action').innerText = row.action;
+    if(document.getElementById('m-target')) document.getElementById('m-target').innerText = row.target;
+
+    try {
+        const metaObj = JSON.parse(row.meta);
+        if(document.getElementById('m-meta')) document.getElementById('m-meta').innerText = JSON.stringify(metaObj, null, 2);
+    } catch(e) {
+        if(document.getElementById('m-meta')) document.getElementById('m-meta').innerText = row.meta;
+    }
+
+    const modal = document.getElementById('detail-modal');
+    if(modal) {
+        modal.classList.remove('hidden');
+        document.body.classList.add('modal-active');
+    }
+}
+
+function closeModal() {
+    const modal = document.getElementById('detail-modal');
+    if(modal) modal.classList.add('hidden');
+    document.body.classList.remove('modal-active');
+}
+
+
+========================================
+FILE: logic_nameplate.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: ADA Etch Nameplates (v2.1)
+ * - Retail file setup charge excluded per request.
+ * - Setup time/cost maintained in Physics Engine for accurate profit tracking.
+ */
+
+function calculateNameplate(inputs, data) {
+    const sqin = inputs.w * inputs.h;
+    const totalSqin = sqin * inputs.qty;
+
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    let baseRateSqIn = 0;
+    
+    // Determine base retail rate based on series and thickness
+    if (inputs.mat.Series.includes('Mattes')) {
+        baseRateSqIn = parseFloat(data.Retail_Price_Mattes_116 || 0.55);
+    } else if (inputs.mat.Series.includes('Ultra') && inputs.mat.Thickness === '1/16"') {
+        baseRateSqIn = parseFloat(data.Retail_Price_Ultra_116 || 0.65);
+    } else {
+        baseRateSqIn = parseFloat(data.Retail_Price_Ultra_18 || 0.85); // 1/8" Ultra
+    }
+
+    let unitPrint = baseRateSqIn * sqin;
+    let retailPrint = unitPrint * inputs.qty;
+
+    // Volume Discount
+    const t1Qty = parseFloat(data.Tier_1_Qty || 10);
+    if (inputs.qty >= t1Qty) {
+        retailPrint *= (1 - parseFloat(data.Tier_1_Disc || 0.05));
+    }
+
+    // VISION TWEAK: Retail Setup Fee is intentionally zeroed out for the UI
+    const feeSetupRetail = 0;
+    
+    const grandTotalRaw = retailPrint + feeSetupRetail;
+    const minOrder = parseFloat(data.Retail_Min_Order || 35);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    // --- 2. COST TRACK (PHYSICS ENGINE) ---
+    const wastePct = parseFloat(data.Waste_Factor || 1.20);
+    
+    // Substrate Yield (Calculated using exact sheet cost from Rowmark array)
+    const costSheet = parseFloat(inputs.mat.Cost_Per_Sheet || 65);
+    const sheetArea = 24 * 48; // 1152 sq in
+    const costSubstrate = (totalSqin / sheetArea) * costSheet * wastePct;
+
+    // Labor Rates
+    const rateEngraver = parseFloat(data.Rate_Machine_Engraver || 10);
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateShop = parseFloat(data.Rate_Shop_Labor || 20);
+
+    // Machine Time & Operator Handling
+    const engraveMins = (totalSqin * parseFloat(data.Time_Engrave_SqIn || 0.25));
+    const costPrepress = (parseFloat(data.Time_Preflight_Job || 10) / 60) * rateOp;
+    const costLoad = ((inputs.qty * parseFloat(data.Time_Engraver_Load_Per_Item || 2)) / 60) * rateOp;
+    const costMachRun = (engraveMins / 60) * rateEngraver;
+
+    // Paint Physics (Only applies if Reverse Engrave)
+    let paintMatCost = 0;
+    let costPaintLabor = 0;
+
+    if (inputs.isReverse) {
+        paintMatCost = totalSqin * parseFloat(data.Cost_Paint_SqIn || 0.01) * wastePct;
+        
+        const paintRunMins = parseFloat(data.Time_Paint_Setup || 15) + (totalSqin * parseFloat(data.Time_Paint_SqIn || 0.10));
+        costPaintLabor = (paintRunMins / 60) * rateShop;
+    }
+
+    const subTotal = costSubstrate + costPrepress + costLoad + costMachRun + paintMatCost + costPaintLabor;
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+    const riskBuffer = subTotal * (riskFactor - 1);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            setupFee: feeSetupRetail, // Send the explicit 0 to the UI
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder,
+            baseRate: baseRateSqIn
+        },
+        cost: {
+            total: subTotal + riskBuffer,
+            breakdown: {
+                rawSubstrate: costSubstrate,
+                rawPaint: paintMatCost,
+                costPrepress: costPrepress,
+                costHandling: costLoad,
+                costMachine: costMachRun,
+                costPaintLabor: costPaintLabor,
+                runHrs: (engraveMins / 60)
+            }
+        },
+        metrics: { margin: (grandTotal - (subTotal + riskBuffer)) / grandTotal }
+    };
+}
+
+
+========================================
+FILE: logic_foam.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Foam Core Boards
+ * Pure Area-Curve Lookup Math + DS Multiplier
+ */
+function calculateFoam(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    let baseRate = 0;
+    let minSignPrice = 0;
+
+    // 1. Fixed Area Curve Lookup (FOM3)
+    if (sqft <= (parseFloat(data.FOM3_T1_Max) || 3.99)) {
+        baseRate = parseFloat(data.FOM3_T1_Rate) || 8.33;
+        minSignPrice = parseFloat(data.FOM3_T1_Min) || 25;
+    } else if (sqft <= (parseFloat(data.FOM3_T2_Max) || 15.99)) {
+        baseRate = parseFloat(data.FOM3_T2_Rate) || 8;
+    } else if (sqft <= (parseFloat(data.FOM3_T3_Max) || 31.99)) {
+        baseRate = parseFloat(data.FOM3_T3_Rate) || 7;
+    } else {
+        baseRate = parseFloat(data.FOM3_T4_Rate) || 6;
+    }
+
+    // Evaluate base per-sign print price
+    let unitPrint = baseRate * sqft;
+    if (unitPrint < minSignPrice) unitPrint = minSignPrice;
+
+    // 2. Double Sided Adder (+50%)
+    if (inputs.sides === 2) {
+        unitPrint *= (1 + (parseFloat(data.Retail_Adder_DS_Mult) || 0.5));
+    }
+
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 3. Volume Discount (10+ Qty Break)
+    if (inputs.qty >= (parseFloat(data.Tier_1_Qty) || 10)) {
+        retailPrint *= (1 - (parseFloat(data.Tier_1_Disc) || 0.05));
+    }
+
+    // 4. Router Fee (If custom shapes are needed)
+    let routerFee = 0;
+    if (inputs.shape === 'CNC Simple') routerFee = parseFloat(data.Retail_Fee_Router_Easy) || 30;
+    else if (inputs.shape === 'CNC Complex' || inputs.shape === 'Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard) || 50;
+
+    // 5. Shop Minimum Guard
+    const minOrder = parseFloat(data.Retail_Min_Order) || 50;
+    let grandTotalRaw = retailPrint + routerFee;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            routerFee: routerFee,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: logic_coro.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Custom Coroplast
+ * Pure Area-Curve Lookup Math + Router Fees (No Hardware)
+ */
+function calculateCoro(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const thk = inputs.thickness;
+
+    let baseRate = 0;
+    let minSignPrice = 0;
+
+    // 1. Fixed Area Curve Lookup
+    if (thk === '4mm') {
+        if (sqft <= (parseFloat(data.COR4_T1_Max) || 3.99)) {
+            baseRate = parseFloat(data.COR4_T1_Rate) || 8.33;
+            minSignPrice = parseFloat(data.COR4_T1_Min) || 25;
+        } else if (sqft <= (parseFloat(data.COR4_T2_Max) || 15.99)) {
+            baseRate = parseFloat(data.COR4_T2_Rate) || 7;
+        } else if (sqft <= (parseFloat(data.COR4_T3_Max) || 31.99)) {
+            baseRate = parseFloat(data.COR4_T3_Rate) || 6;
+        } else {
+            baseRate = parseFloat(data.COR4_T4_Rate) || 5;
+        }
+    } else {
+        if (sqft <= (parseFloat(data.COR10_T1_Max) || 3.99)) {
+            baseRate = parseFloat(data.COR10_T1_Rate) || 25;
+            minSignPrice = parseFloat(data.COR10_T1_Min) || 75;
+        } else if (sqft <= (parseFloat(data.COR10_T2_Max) || 15.99)) {
+            baseRate = parseFloat(data.COR10_T2_Rate) || 21;
+        } else if (sqft <= (parseFloat(data.COR10_T3_Max) || 31.99)) {
+            baseRate = parseFloat(data.COR10_T3_Rate) || 18;
+        } else {
+            baseRate = parseFloat(data.COR10_T4_Rate) || 15;
+        }
+    }
+
+    // Evaluate base per-sign print price
+    let unitPrint = baseRate * sqft;
+    if (unitPrint < minSignPrice) unitPrint = minSignPrice;
+
+    // 2. Double Sided Adder
+    if (inputs.sides === 2) {
+        const dsAdder = thk === '4mm' ? (parseFloat(data.Retail_Adder_DS_4mm) || 2.5) : (parseFloat(data.Retail_Adder_DS_10mm) || 5);
+        unitPrint += (dsAdder * sqft);
+    }
+
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 3. Volume Discount (10+ Qty Break)
+    const t1Qty = parseFloat(data.Tier_1_Qty) || 10;
+    if (inputs.qty >= t1Qty) {
+        const discPct = parseFloat(data.Tier_1_Disc) || 0.05;
+        retailPrint *= (1 - discPct);
+    }
+
+    // 4. Router Fee
+    let routerFee = 0;
+    if (inputs.shape === 'CNC Simple') routerFee = parseFloat(data.Retail_Fee_Router_Easy) || 30;
+    else if (inputs.shape === 'CNC Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard) || 50;
+
+    // 5. Shop Minimum Guard
+    const minOrder = parseFloat(data.Retail_Min_Order) || 50;
+    let grandTotalRaw = retailPrint + routerFee;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            routerFee: routerFee,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: logic_yard.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Yard Signs
+ * Pure Fixed-Tier Lookup Math + No Setup or Design Fees
+ */
+function calculateYardSign(inputs, data) {
+    // 1. Base Print Lookup
+    let baseRate = parseFloat(data.Retail_Price_Sign_SS) || 0;
+    const t1Qty = parseFloat(data.Tier_1_Qty) || 10;
+    
+    // Apply 10+ Discount if reached
+    if (inputs.qty >= t1Qty) {
+        baseRate = parseFloat(data.Tier_1_Price) || 0;
+    }
+
+    // Double Sided Adder (Not discounted per original logic)
+    let dsAdder = 0;
+    if (inputs.sides === 2) {
+        dsAdder = parseFloat(data.Retail_Price_Sign_DS) || 0;
+    }
+
+    const unitPrint = baseRate + dsAdder;
+    const retailPrint = unitPrint * inputs.qty;
+
+    // 2. Hardware (Stakes) Lookup
+    let stakeTotal = 0;
+    if (inputs.stakes) {
+        let stakePrice = parseFloat(data.Retail_Stake_T1_Price) || 0;
+        const t2Qty = parseFloat(data.Retail_Stake_T2_Qty) || 50;
+        const t3Qty = parseFloat(data.Retail_Stake_T3_Qty) || 100;
+
+        // Apply Stake Quantity Breaks
+        if (inputs.qty >= t3Qty) stakePrice = parseFloat(data.Retail_Stake_T3_Price) || 0;
+        else if (inputs.qty >= t2Qty) stakePrice = parseFloat(data.Retail_Stake_T2_Price) || 0;
+
+        stakeTotal = stakePrice * inputs.qty;
+    }
+
+    // 3. Shop Minimum Guard
+    const minOrder = parseFloat(data.Retail_Min_Order) || 0;
+    let grandTotalRaw = retailPrint + stakeTotal;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            stakeTotal: stakeTotal,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: cost_cut.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Cut Vinyl Lettering
+ * Full Material Support. Weeding complexity does NOT add to retail price.
+ */
+function calculateCutVinyl(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    
+    // 1. Material Base Rate Lookup
+    let baseRate = 0;
+    if (inputs.material === '651') baseRate = parseFloat(data.Retail_Price_Intermediate) || 12.00;
+    else if (inputs.material === '751') baseRate = parseFloat(data.Retail_Price_751) || 18.00;
+    else if (inputs.material === '951') baseRate = parseFloat(data.Retail_Price_951) || 22.00;
+    else if (inputs.material === '8500') baseRate = parseFloat(data.Retail_Price_8500) || 20.00;
+    else if (inputs.material === '8800') baseRate = parseFloat(data.Retail_Price_8800) || 25.00;
+    else if (inputs.material === 'Glass') baseRate = parseFloat(data.Retail_Price_Glass) || 25.00;
+    else if (inputs.material === 'Specialty') baseRate = parseFloat(data.Retail_Price_Specialty) || 16.00;
+    else baseRate = parseFloat(data.Retail_Price_751) || 18.00; // Default
+
+    let unitPrint = baseRate * sqft;
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 2. Volume Discounts (Tiers 1 & 2)
+    let discPct = 0;
+    const t2Qty = parseFloat(data.Tier_2_Qty) || 50;
+    const t1Qty = parseFloat(data.Tier_1_Qty) || 10;
+
+    if (inputs.qty >= t2Qty) {
+        discPct = parseFloat(data.Tier_2_Disc) || 0.10;
+    } else if (inputs.qty >= t1Qty) {
+        discPct = parseFloat(data.Tier_1_Disc) || 0.05;
+    }
+
+    retailPrint *= (1 - discPct);
+
+    // 3. Shop Minimum Guard (Weeding adds $0 to retail)
+    const minOrder = parseFloat(data.Retail_Min_Order) || 45;
+    let grandTotal = Math.max(retailPrint, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            grandTotal: grandTotal,
+            isMinApplied: retailPrint < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: cost_foam.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Foam Core Boards (v1.3)
+ * Bug Fix: Corrected split array index for dimension parsing.
+ */
+function calculateFoam(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    const reqShort = Math.min(inputs.w, inputs.h);
+    const reqLong = Math.max(inputs.w, inputs.h);
+    const sideStr = inputs.sides === 2 ? 'DS' : 'SS';
+    
+    let bestFitArea = Infinity;
+    let bestP1 = null, bestP10 = null, bestLabel = "";
+
+    // Bounding Box Search
+    Object.keys(data).forEach(key => {
+        if (key.startsWith(`RET_FOM316_`) && key.endsWith(`_${sideStr}_1`)) {
+            const dimStr = key.split('_')[2]; 
+            const stdShort = parseInt(dimStr.substring(0, 2), 10);
+            const stdLong = parseInt(dimStr.substring(2), 10);
+            const stdArea = stdShort * stdLong;
+
+            if (reqShort <= stdShort && reqLong <= stdLong && stdArea < bestFitArea) {
+                bestFitArea = stdArea;
+                bestP1 = parseFloat(data[key]);
+                bestP10 = parseFloat(data[key.replace(/_1$/, '_10')]) || bestP1;
+                bestLabel = `${stdShort}x${stdLong}`;
+            }
+        }
+    });
+
+    let baseUnitPrice = 0;
+    const t1Qty = parseFloat(data.Tier_1_Qty || 10);
+    const tierLog = [];
+
+    if (bestP1 !== null) {
+        baseUnitPrice = inputs.qty >= t1Qty ? bestP10 : bestP1;
+        tierLog.push({ q: 1, base: bestP1, unit: bestP1 }, { q: t1Qty, base: bestP10, unit: bestP10 });
+    } else {
+        let baseSqFtRate = 0;
+        if (sqft <= parseFloat(data.FOM3_T1_Max || 3.99)) baseSqFtRate = parseFloat(data.FOM3_T1_Rate || 8.33);
+        else if (sqft <= parseFloat(data.FOM3_T2_Max || 15.99)) baseSqFtRate = parseFloat(data.FOM3_T2_Rate || 8.00);
+        else if (sqft <= parseFloat(data.FOM3_T3_Max || 31.99)) baseSqFtRate = parseFloat(data.FOM3_T3_Rate || 7.00);
+        else baseSqFtRate = parseFloat(data.FOM3_T4_Rate || 6.00);
+
+        let rawBase = baseSqFtRate * sqft;
+        if (rawBase < parseFloat(data.FOM3_T1_Min || 25.00)) rawBase = parseFloat(data.FOM3_T1_Min || 25.00);
+        if (inputs.sides === 2) rawBase *= (1 + parseFloat(data.Retail_Adder_DS_Mult || 0.50));
+
+        const discPct = inputs.qty >= t1Qty ? parseFloat(data.Tier_1_Disc || 0.05) : 0;
+        baseUnitPrice = rawBase * (1 - discPct);
+
+        tierLog.push(
+            { q: 1, base: rawBase, unit: rawBase },
+            { q: t1Qty, base: rawBase, unit: rawBase * (1 - parseFloat(data.Tier_1_Disc || 0.05)) }
+        );
+    }
+
+    const retailPrint = baseUnitPrice * inputs.qty;
+    const feeDesign = inputs.incDesign ? parseFloat(data.Retail_Fee_Design || 45) : 0;
+    const grandTotalRaw = retailPrint + feeDesign;
+    const minOrder = bestP1 !== null ? 0 : parseFloat(data.Retail_Min_Order || 50);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    // --- 2. COST ENGINE ---
+    const totalSqFt = sqft * inputs.qty;
+    const wastePct = parseFloat(data.Waste_Factor || 1.15);
+    const costSubstrate = (totalSqFt / 32) * parseFloat(data.Cost_Stock_316_4x8 || 13.86) * wastePct;
+    const costInk = totalSqFt * parseFloat(data.Cost_Ink_Latex || 0.16) * inputs.sides;
+
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const costPrepressPrint = (parseFloat(data.Time_Prepress_Print || 10) / 60) * rateOp;
+    const costMachSetupPrint = ((parseFloat(data.Time_Setup_Printer || 5) + parseFloat(data.Time_Handling || 5)) / 60) * rateOp;
+
+    const printHrs = ((totalSqFt / 2) / parseFloat(data.Machine_Speed_LF_Hr || 25)) * inputs.sides;
+    const costPrintOp = printHrs * rateOp * parseFloat(data.Labor_Attendance_Ratio || 0.10);
+    const costPrintMach = printHrs * parseFloat(data.Rate_Machine_Flatbed || 10);
+
+    const costCutLabor = ((parseFloat(data.Time_Shear_Setup || 5) + (inputs.qty * parseFloat(data.Time_Shear_Cut || 1))) / 60) * parseFloat(data.Rate_Shop_Labor || 20);
+
+    const subTotal = costSubstrate + costInk + costPrepressPrint + costMachSetupPrint + costPrintOp + costPrintMach + costCutLabor;
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+
+    return {
+        retail: { unitPrice: retailPrint / inputs.qty, printTotal: retailPrint, designFee: feeDesign, grandTotal: grandTotal, isMinApplied: grandTotalRaw < minOrder, tiers: tierLog, yieldLabel: bestLabel ? `Yield Box: ${bestLabel}` : "Area Curve" },
+        cost: { total: subTotal * riskFactor, breakdown: { rawSubstrate: costSubstrate, rawInk: costInk, costPrepressPrint: costPrepressPrint, costMachSetupPrint: costMachSetupPrint, costPrintLabor: costPrintOp, costPrintMach: costPrintMach, costCutLabor: costCutLabor, riskCost: subTotal * (riskFactor - 1), wastePct: (wastePct - 1) * 100, riskPct: (riskFactor - 1) * 100 } },
+        metrics: { margin: (grandTotal - (subTotal * riskFactor)) / grandTotal }
+    };
+}
+// ==========================================
+// SIMULATOR CONFIGURATION SCHEMA
+// ==========================================
+window.FOAM_CONFIG = {
+    tab: 'PROD_Foam_Signs',
+    engine: calculateFoam,
+    controls: [
+        { id: 'w', label: 'Width (in)', type: 'number', def: 24 },
+        { id: 'h', label: 'Height (in)', type: 'number', def: 18 },
+        { id: 'thickness', label: 'Thickness', type: 'select', opts: [{v:'3/16', t:'3/16" Standard'}] },
+        { id: 'sides', label: 'Print Sides', type: 'select', opts: [{v:1, t:'1-Sided'}, {v:2, t:'2-Sided'}] },
+        { id: 'shape', label: 'Cut Type', type: 'select', opts: [{v:'Rectangle', t:'Square Cut'}, {v:'CNC Simple', t:'CNC Simple'}, {v:'CNC Complex', t:'CNC Complex'}] },
+        { id: 'files', label: 'Files', type: 'number', def: 1 },
+        { id: 'setupPerFile', label: 'Setup / File', type: 'toggle', def: false },
+        { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    retails: [
+        { heading: 'Foam Board Area Curves', key: 'FOM3_T1_Rate', label: 'T1 Rate ($/sf)' },
+        { key: 'FOM3_T2_Rate', label: 'T2 Rate ($/sf)' },
+        { key: 'FOM3_T3_Rate', label: 'T3 Rate ($/sf)' },
+        { key: 'Retail_Adder_DS_Mult', label: 'DS Adder Mult (1.x)' },
+        { key: 'Retail_Fee_Router_Easy', label: 'CNC Easy Fee' },
+        { key: 'Retail_Fee_Router_Hard', label: 'CNC Complex Fee' },
+        { heading: 'Discounts', key: 'Tier_1_Qty', label: 'T1 Discount Qty' },
+        { key: 'Tier_1_Disc', label: 'T1 Discount (%)' }
+    ],
+    costs: [
+        { heading: 'Materials', key: 'Cost_Stock_316_4x8', label: '3/16" 4x8 Sheet ($)' },
+        { key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+        { heading: 'Machine Speeds & Time', key: 'Machine_Speed_LF_Hr', label: 'Print Spd (LF/hr)' },
+        { key: 'Time_Prepress_Print', label: 'Print Prepress (Mins)' },
+        { key: 'Time_Setup_Printer', label: 'Print Load (Mins)' },
+        { key: 'Time_Handling', label: 'Handling (Mins)' },
+        { heading: 'Rates & Overhead', key: 'Rate_Operator', label: 'Print Op ($/Hr)' },
+        { key: 'Rate_Shop_Labor', label: 'Finishing Labor ($/Hr)' },
+        { key: 'Rate_Machine_Flatbed', label: 'Printer Mach ($/Hr)' },
+        { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' },
+        { key: 'Waste_Factor', label: 'Waste Buffer' }
+    ],
+    renderReceipt: function(data, fmt) {
+        let retailHTML = `<div><h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+        <div class="space-y-1 text-xs text-gray-700">
+        <div class="flex justify-between"><span>Base Print:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+        ${data.retail.routerFee > 0 ? `<div class="flex justify-between text-orange-700"><span>CNC Routing Fee:</span> <span>${fmt(data.retail.routerFee)}</span></div>` : ''}
+        <div class="flex justify-between"><span>Setup Fee:</span> <span>${fmt(data.retail.setupFee || 0)}</span></div>
+        ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+        <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+        </div></div>`;
+
+        let costHTML = `<div class="mt-6"><h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+        <div class="space-y-1 text-xs text-gray-700">`;
+        if (data.cost.breakdown) {
+            const b = data.cost.breakdown;
+            costHTML += `
+            <div class="flex justify-between"><span>Raw Blanks/Sheets:</span> <span>${fmt(b.rawSubstrate)}</span></div>
+            <div class="flex justify-between"><span>Ink:</span> <span>${fmt(b.rawInk)}</span></div>
+            <div class="flex justify-between"><span>Setup Labor:</span> <span>${fmt(b.costPrepressPrint + b.costMachSetupPrint)}</span></div>
+            <div class="flex justify-between"><span>Machine Run:</span> <span>${fmt(b.costPrintMach)}</span></div>
+            <div class="flex justify-between"><span>Finishing & Operator Labor:</span> <span>${fmt(b.costPrintLabor + (b.costCutLabor||0))}</span></div>
+            <div class="border-t border-gray-200 mt-2 pt-1"></div>
+            <div class="flex justify-between text-red-600"><span>Material Waste (${b.wastePct ? b.wastePct.toFixed(0) : 10}%):</span> <span>(Calculated Above)</span></div>
+            <div class="flex justify-between text-orange-500 opacity-80"><span>Suggested Risk Buffer (${b.riskPct ? b.riskPct.toFixed(0) : 5}%):</span> <span>(+ ${fmt(b.riskCost)})</span></div>`;
+        }
+        costHTML += `<div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div></div></div>`;
+        return retailHTML + costHTML;
+    }
+};
+
+
+========================================
+FILE: cost_wall.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Interior Wall Wraps (v1.2)
+ * Supports Window Perf storefront integration, dynamic panel tracking, and Line Item Qty.
+ */
+function calculateWall(inputs, data) {
+    // --- 1. RETAIL ENGINE ---
+    const retWall = parseFloat(data.Retail_Price_Wall_SqFt || 10);
+    const retPerf = parseFloat(data.Retail_Price_Perf_SqFt || 12);
+    const retInstall = parseFloat(data.Retail_Install_Wall_SqFt || 3);
+    
+    let totalRetailPrint = 0;
+    let totalSqFt = 0;
+    let panelLogs = [];
+
+    inputs.panels.forEach(p => {
+        const sqft = (p.w * p.h) / 144;
+        const lineQty = p.qty || 1;
+        const area = sqft * lineQty * inputs.qty;
+        totalSqFt += area;
+
+        const shortEdge = Math.min(p.w, p.h);
+        const panelCount = (shortEdge <= 52 ? 1 : Math.ceil((shortEdge - 1) / 51)) * lineQty;
+
+        let retailUnit = p.material === 'perf' ? retPerf : retWall;
+        const rowRetail = retailUnit * area;
+        totalRetailPrint += rowRetail;
+
+        panelLogs.push({ 
+            label: p.label || 'Wall Section', 
+            material: p.material,
+            qty: lineQty,
+            w: p.w, h: p.h,
+            sqft: area, 
+            retail: rowRetail, 
+            panels: panelCount
+        });
+    });
+
+    const totalInstallRetail = totalSqFt * retInstall;
+
+    let appliedPrintRetail = totalRetailPrint;
+    let i = 1;
+    const tierLog = [];
+    while (data[`Tier_${i}_Qty`]) {
+        const tQty = parseFloat(data[`Tier_${i}_Qty`]);
+        const tDisc = parseFloat(data[`Tier_${i}_Disc`] || 0);
+        let discountedPrint = totalRetailPrint * (1 - tDisc);
+        if (inputs.qty >= tQty) appliedPrintRetail = discountedPrint;
+        tierLog.push({ q: tQty, base: totalRetailPrint, unit: discountedPrint, pct: tDisc });
+        i++;
+    }
+
+    const feeDesign = inputs.incDesign ? (parseFloat(data.Retail_Fee_Design || 85) * inputs.files) : 0;
+    const grandTotalRaw = appliedPrintRetail + totalInstallRetail + feeDesign;
+    const minOrder = parseFloat(data.Retail_Min_Order || 150);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    // --- 2. COST ENGINE ---
+    const costVinWall = parseFloat(data.Cost_Vin_Wall || 0.59);
+    const costLamWall = parseFloat(data.Cost_Lam_Wall || 0.36);
+    const costVinPerf = parseFloat(data.Cost_Vinyl_Perf || 0.65);
+    const costLamPerf = parseFloat(data.Cost_Lam_Perf || 0.25);
+    const inkCost = parseFloat(data.Cost_Ink_Latex || 0.16);
+    
+    const waste = parseFloat(data.Waste_Factor || 1.25);
+    const risk = parseFloat(data.Factor_Risk || 1.10);
+
+    let totalCostMat = 0;
+    inputs.panels.forEach(p => {
+        const lineQty = p.qty || 1;
+        const area = ((p.w * p.h) / 144) * lineQty * inputs.qty;
+        let matUnit = p.material === 'perf' ? (costVinPerf + costLamPerf) : (costVinWall + costLamWall);
+        totalCostMat += (matUnit * area * waste);
+    });
+
+    const totalCostInk = totalSqFt * inkCost * waste;
+
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateInstall = parseFloat(data.Rate_Install || 32);
+    const rateMach = parseFloat(data.Rate_Machine_Print || 5);
+    const attnRatio = parseFloat(data.Labor_Attendance_Ratio || 0.10);
+
+    const speedPrint = parseFloat(data.Speed_Print_Roll || 150);
+    const speedLam = parseFloat(data.Speed_Lam_Roll || 300);
+    const speedInstall = parseFloat(data.Speed_Install_Wall || 25);
+
+    const printHrs = totalSqFt / speedPrint;
+    const lamHrs = totalSqFt / speedLam;
+    const installHrs = totalSqFt / speedInstall;
+
+    const costPrintOp = (printHrs + lamHrs) * rateOp * attnRatio;
+    const costInstallLabor = installHrs * rateInstall;
+    const costMach = (printHrs + lamHrs) * rateMach;
+
+    const rawSubTotal = totalCostMat + totalCostInk + costPrintOp + costInstallLabor + costMach;
+    const riskCost = rawSubTotal * (risk - 1);
+    const totalCost = rawSubTotal + riskCost;
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: appliedPrintRetail,
+            installTotal: totalInstallRetail,
+            designFee: feeDesign,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder,
+            panels: panelLogs,
+            tiers: tierLog
+        },
+        cost: {
+            total: totalCost,
+            breakdown: { materials: totalCostMat, ink: totalCostInk, printLabor: costPrintOp, installLabor: costInstallLabor, machine: costMach, risk: riskCost }
+        }
+    };
+}
+
+window.WALL_CONFIG = {
+    tab: 'PROD_Vinyl_Wraps',
+    engine: calculateWall,
+    controls: [
+        { id: 'w', label: 'Simulated Width', type: 'number', def: 120 },
+        { id: 'h', label: 'Simulated Height', type: 'number', def: 96 },
+        { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    dynamicUI: function(inputs) {
+        inputs.panels = [{ label: "Simulated Wall", qty: 1, w: inputs.w, h: inputs.h }];
+        return inputs;
+    },
+    retails: [
+        { heading: 'Market Base ($/SqFt)', key: 'Retail_Price_Wall_SqFt', label: 'Wall Wrap Rate ($)' },
+        { heading: 'Installation Matrix', key: 'Retail_Install_Wall_SqFt', label: 'Wall Install ($/SqFt)' },
+        { heading: 'Flat Fees', key: 'Retail_Fee_Design', label: 'Design Fee ($)' }
+    ],
+    costs: [
+        { heading: 'Raw Materials', key: 'Cost_Vin_Wall', label: 'Wall Vinyl ($/SqFt)' },
+        { key: 'Cost_Lam_Wall', label: 'Wall Lam ($/SqFt)' },
+        { key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+        { heading: 'Labor & Speeds', key: 'Rate_Operator', label: 'Operator ($/Hr)' },
+        { key: 'Rate_Install', label: 'Installer ($/Hr)' },
+        { key: 'Rate_Machine_Print', label: 'Printer Mach ($/Hr)' },
+        { key: 'Speed_Print_Roll', label: 'Print Spd (SqFt/hr)' },
+        { key: 'Speed_Lam_Roll', label: 'Lam Spd (SqFt/hr)' },
+        { key: 'Speed_Install_Wall', label: 'Install Spd (SqFt/hr)' },
+        { heading: 'Modifiers', key: 'Waste_Factor', label: 'Waste (1.x)' },
+        { key: 'Factor_Risk', label: 'Risk (1.x)' },
+        { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' }
+    ],
+    renderReceipt: function(data, fmt) {
+        return `
+            <div>
+                <h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+                <div class="space-y-1 text-xs text-gray-700">
+                    <div class="flex justify-between"><span>Printed Wall Graphics:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+                    <div class="flex justify-between"><span>Installation:</span> <span>${fmt(data.retail.installTotal)}</span></div>
+                    ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+                    <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+                </div>
+            </div>
+            <div class="mt-6">
+                <h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+                <div class="space-y-1 text-xs text-gray-700">
+                    <div class="flex justify-between"><span>Vinyl + Lam + Waste:</span> <span>${fmt(data.cost.breakdown.materials)}</span></div>
+                    <div class="flex justify-between"><span>Ink Usage:</span> <span>${fmt(data.cost.breakdown.ink)}</span></div>
+                    <div class="flex justify-between"><span>Print Labor:</span> <span>${fmt(data.cost.breakdown.printLabor)}</span></div>
+                    <div class="flex justify-between"><span>Machine Time:</span> <span>${fmt(data.cost.breakdown.machine)}</span></div>
+                    <div class="flex justify-between text-blue-600 font-bold border-t border-gray-100 pt-1 mt-1"><span>Installation Labor:</span> <span>${fmt(data.cost.breakdown.installLabor)}</span></div>
+                    <div class="flex justify-between text-orange-500 opacity-80 border-t border-gray-100 pt-1 mt-1"><span>Risk Buffer:</span> <span>(+ ${fmt(data.cost.breakdown.risk)})</span></div>
+                    <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div>
+                </div>
+            </div>
+        `;
+    }
+};
+
+
+========================================
+FILE: logic_wall.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Interior Wall Wraps
+ * Supports GF226 Smooth vs 3M IJ8624 Textured vs Perf
+ */
+function calculateWall(inputs, data) {
+    let totalRetailPrint = 0;
+    let totalInstall = 0;
+    let totalSqFt = 0;
+
+    inputs.panels.forEach(p => {
+        const sqft = (p.w * p.h) / 144;
+        const area = sqft * inputs.qty;
+        totalSqFt += area;
+
+        // Apply distinct material rates
+        let printUnit = 0;
+        let installUnit = 0;
+        
+        if (p.material === 'textured') {
+            printUnit = parseFloat(data.Retail_Price_Wall_Text_SqFt) || 15.00;
+            installUnit = parseFloat(data.Retail_Install_Wall_Text_SqFt) || 5.00;
+        } else if (p.material.startsWith('perf')) {
+            printUnit = parseFloat(data.Retail_Price_Perf_SqFt) || 12.00; 
+            installUnit = parseFloat(data.Retail_Install_Wall_Smooth_SqFt) || 3.00;
+        } else {
+            printUnit = parseFloat(data.Retail_Price_Wall_Smooth_SqFt) || 10.00;
+            installUnit = parseFloat(data.Retail_Install_Wall_Smooth_SqFt) || 3.00;
+        }
+
+        totalRetailPrint += (printUnit * area);
+        if (inputs.install === 'Yes') totalInstall += (installUnit * area);
+    });
+
+    // Volume Discounts 
+    let discPct = 0;
+    if (inputs.qty >= (parseFloat(data.Tier_2_Qty) || 5)) discPct = parseFloat(data.Tier_2_Disc) || 0.10;
+    else if (inputs.qty >= (parseFloat(data.Tier_1_Qty) || 3)) discPct = parseFloat(data.Tier_1_Disc) || 0.05;
+
+    totalRetailPrint *= (1 - discPct);
+
+    const minOrder = parseFloat(data.Retail_Min_Order) || 150;
+    let grandTotalRaw = totalRetailPrint + totalInstall;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: totalRetailPrint,
+            installTotal: totalInstall,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder,
+            displaySqFt: totalSqFt
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: logic_acm.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: ACM Signs
+ * Pure Area-Curve Lookup Math + Multipliers
+ */
+function calculateACM(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    let baseRate = 0;
+    let minSignPrice = 0;
+
+    // 1. Fixed Area Curve Lookup
+    if (inputs.thickness === '3mm') {
+        if (sqft <= (parseFloat(data.ACM3_T1_Max) || 2.99)) { 
+            baseRate = parseFloat(data.ACM3_T1_Rate) || 24; 
+            minSignPrice = parseFloat(data.ACM3_T1_Min) || 25; 
+        }
+        else if (sqft <= (parseFloat(data.ACM3_T2_Max) || 5.99)) baseRate = parseFloat(data.ACM3_T2_Rate) || 18;
+        else if (sqft <= (parseFloat(data.ACM3_T3_Max) || 11.99)) baseRate = parseFloat(data.ACM3_T3_Rate) || 16;
+        else if (sqft <= (parseFloat(data.ACM3_T4_Max) || 31.99)) baseRate = parseFloat(data.ACM3_T4_Rate) || 15;
+        else baseRate = parseFloat(data.ACM3_T5_Rate) || 14;
+    } else {
+        if (sqft <= (parseFloat(data.ACM6_T1_Max) || 2.99)) { 
+            baseRate = parseFloat(data.ACM6_T1_Rate) || 35.33; 
+            minSignPrice = parseFloat(data.ACM6_T1_Min) || 26.50; 
+        }
+        else if (sqft <= (parseFloat(data.ACM6_T2_Max) || 5.99)) baseRate = parseFloat(data.ACM6_T2_Rate) || 20.50;
+        else if (sqft <= (parseFloat(data.ACM6_T3_Max) || 11.99)) baseRate = parseFloat(data.ACM6_T3_Rate) || 18.50;
+        else if (sqft <= (parseFloat(data.ACM6_T4_Max) || 31.99)) baseRate = parseFloat(data.ACM6_T4_Rate) || 17.50;
+        else baseRate = parseFloat(data.ACM6_T5_Rate) || 16.50;
+    }
+
+    // Evaluate base per-sign print price
+    let unitPrint = baseRate * sqft;
+    if (unitPrint < minSignPrice) unitPrint = minSignPrice;
+
+    // 2. Double Sided Adder (+50%)
+    if (inputs.sides === 2) {
+        unitPrint *= (1 + (parseFloat(data.Retail_Adder_DS_Mult) || 0.5));
+    }
+
+    // 3. Black ACM Adder (Double Price)
+    if (inputs.color === 'Black') {
+        unitPrint *= (parseFloat(data.Retail_Adder_Black_Mult) || 2);
+    }
+
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 4. Volume Discount (10+ Qty Break)
+    if (inputs.qty >= (parseFloat(data.Tier_1_Qty) || 10)) {
+        retailPrint *= (1 - (parseFloat(data.Tier_1_Disc) || 0.05));
+    }
+
+    // 5. Router Fee
+    let routerFee = 0;
+    if (inputs.shape === 'CNC Simple') routerFee = parseFloat(data.Retail_Fee_Router_Easy) || 30;
+    else if (inputs.shape === 'CNC Complex' || inputs.shape === 'Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard) || 50;
+
+    // 6. Shop Minimum Guard
+    const minOrder = parseFloat(data.Retail_Min_Order) || 50;
+    let grandTotalRaw = retailPrint + routerFee;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            routerFee: routerFee,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: cost_acm.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: ACM Signs (v3.5)
+ * Bug Fix: Corrected split array index for dimension parsing.
+ */
+function calculateACM(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const totalSqFt = sqft * inputs.qty;
+    
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    const reqShort = Math.min(inputs.w, inputs.h);
+    const reqLong = Math.max(inputs.w, inputs.h);
+    const sideStr = inputs.sides === 2 ? 'DS' : 'SS';
+    const thickStr = inputs.thickness === '6mm' ? '6' : '3';
+    
+    let bestFitArea = Infinity;
+    let bestP1 = null, bestP10 = null, bestLabel = "";
+
+// Bounding Box Search
+    Object.keys(data).forEach(key => {
+        if (key.startsWith(`RET_ACM${thickStr}_`) && key.endsWith(`_${sideStr}_1`)) {
+            const dimStr = key.split('_')[2]; 
+            const stdShort = parseInt(dimStr.substring(0, 2), 10);
+            const stdLong = parseInt(dimStr.substring(2), 10);
+            const stdArea = stdShort * stdLong;
+
+            if (reqShort <= stdShort && reqLong <= stdLong && stdArea < bestFitArea) {
+                bestFitArea = stdArea;
+                bestP1 = parseFloat(data[key]);
+                bestP10 = parseFloat(data[key.replace(/_1$/, '_10')]) || bestP1;
+                bestLabel = `${stdShort}x${stdLong}`;
+            }
+        }
+    });
+
+    let baseUnitPrice = 0;
+    const t1Qty = parseFloat(data.Tier_1_Qty || 10);
+    const tierLog = [];
+
+    if (bestP1 !== null) {
+        baseUnitPrice = inputs.qty >= t1Qty ? bestP10 : bestP1;
+        tierLog.push({ q: 1, base: bestP1, unit: bestP1 }, { q: t1Qty, base: bestP10, unit: bestP10 });
+    } else {
+        let baseSqFtRate = inputs.thickness === '6mm' ? 16.50 : 14.00;
+        let signMinPrice = 0;
+        let t = 1;
+        const prefix = `ACM${thickStr}`;
+
+        while (data[`${prefix}_T${t}_Max`]) {
+            if (sqft <= parseFloat(data[`${prefix}_T${t}_Max`])) {
+                baseSqFtRate = parseFloat(data[`${prefix}_T${t}_Rate`]);
+                signMinPrice = parseFloat(data[`${prefix}_T${t}_Min`] || 0);
+                break;
+            }
+            t++;
+        }
+
+        let rawBase = baseSqFtRate * sqft;
+        if (rawBase < signMinPrice) rawBase = signMinPrice;
+        if (inputs.sides === 2) rawBase += (rawBase * parseFloat(data.Retail_Adder_DS_Mult || 0.5));
+        
+        const discPct = inputs.qty >= t1Qty ? parseFloat(data.Tier_1_Disc || 0.05) : 0;
+        baseUnitPrice = rawBase * (1 - discPct);
+
+        tierLog.push(
+            { q: 1, base: rawBase, unit: rawBase },
+            { q: t1Qty, base: rawBase, unit: rawBase * (1 - parseFloat(data.Tier_1_Disc || 0.05)) }
+        );
+    }
+
+    if (inputs.color === 'Black' && inputs.thickness === '6mm') {
+        const blkMult = parseFloat(data.Retail_Adder_Black_Mult || 2);
+        baseUnitPrice *= blkMult;
+        tierLog.forEach(t => t.unit *= blkMult);
+    }
+
+    let retailPrint = baseUnitPrice * inputs.qty;
+    let routerFee = 0;
+    if (inputs.shape !== 'Rectangle') {
+        routerFee = inputs.shape === 'Easy' ? parseFloat(data.Retail_Fee_Router_Easy || 30) : parseFloat(data.Retail_Fee_Router_Hard || 50);
+    }
+
+    const feeDesign = inputs.incDesign ? parseFloat(data.Retail_Fee_Design || 45) : 0;
+    const feeSetupBase = parseFloat(data.Retail_Fee_Setup || 15);
+    const feeSetup = inputs.setupPerFile ? (feeSetupBase * inputs.files) : feeSetupBase;
+
+    const grandTotalRaw = retailPrint + routerFee + feeSetup + feeDesign;
+    const minOrder = bestP1 !== null ? 0 : parseFloat(data.Retail_Min_Order || 50);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    tierLog.forEach(t => t.unit = (t.unit * t.q + routerFee) / t.q);
+
+    // --- 2. COST ENGINE ---
+    const wasteFactor = parseFloat(data.Waste_Factor || 1.15);
+    const stockSheets = inputs.thickness === '6mm'
+        ? [{w: 48, h: 96, cost: parseFloat(data.Cost_Stock_6mm_4x8 || 72.10)}, {w: 60, h: 120, cost: parseFloat(data.Cost_Stock_6mm_5x10 || 132.39)}]
+        : [{w: 48, h: 96, cost: parseFloat(data.Cost_Stock_3mm_4x8 || 52.09)}, {w: 48, h: 120, cost: parseFloat(data.Cost_Stock_3mm_4x10 || 69.44)}, {w: 60, h: 120, cost: parseFloat(data.Cost_Stock_3mm_5x10 || 75.75)}];
+
+    let lowestCost = Infinity;
+    stockSheets.forEach(sheet => {
+        const sheetsNeeded = Math.ceil((sqft * inputs.qty * wasteFactor) / ((sheet.w * sheet.h)/144));
+        if (sheetsNeeded * sheet.cost < lowestCost) lowestCost = sheetsNeeded * sheet.cost;
+    });
+
+    const rawMat = lowestCost;
+    const wasteCost = rawMat - (rawMat / wasteFactor);
+    const totalInk = totalSqFt * inputs.sides * parseFloat(data.Cost_Ink_Latex || 0.16);
+
+    const speedLF = parseFloat(data.Machine_Speed_LF_Hr || 25);
+    const ratePrintMach = parseFloat(data.Rate_Machine_Flatbed || 10);
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const printHrs = (totalSqFt / 4) / speedLF;
+    const costPrintMach = printHrs * ratePrintMach;
+    const costPrintOp = printHrs * rateOp * parseFloat(data.Labor_Attendance_Ratio || 0.10);
+
+    let costCutSetup = 0, costCutLabor = 0, costCutMach = 0, costRound = 0, runHrsCNC = 0;
+    if (inputs.shape === 'Rectangle') {
+        costCutSetup = (parseFloat(data.Time_Shear_Setup || 5) / 60) * rateOp;
+        costCutLabor = ((parseFloat(data.Time_Shear_Cut || 1) * inputs.qty) / 60) * rateOp;
+        if (inputs.rounded) {
+            costRound = ((parseFloat(data.Time_Round_Setup || 5) + (parseFloat(data.Time_Round_Corner || 0.5) * 4 * inputs.qty)) / 60) * rateOp;
+        }
+    } else {
+        const rateCNC = parseFloat(data.Rate_CNC_Labor || 25);
+        runHrsCNC = ((inputs.shape === 'Easy' ? parseFloat(data.Time_CNC_Easy_SqFt || 1) : parseFloat(data.Time_CNC_Complex_SqFt || 2)) * totalSqFt) / 60;
+        costCutSetup = (parseFloat(data.Time_Setup_CNC || 10) / 60) * rateCNC;
+        costCutMach = runHrsCNC * parseFloat(data.Rate_Machine_CNC || 10);
+        costCutLabor = runHrsCNC * rateCNC * parseFloat(data.Labor_Attendance_Ratio || 0.10);
+    }
+
+    const subTotal = rawMat + totalInk + costPrintMach + costPrintOp + costCutSetup + costCutLabor + costCutMach + costRound;
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+    const riskBuffer = subTotal * (riskFactor - 1);
+
+    return {
+        retail: {
+            unitPrice: (retailPrint + routerFee) / inputs.qty, printTotal: retailPrint, routerFee: routerFee, setupFee: feeSetup, designFee: feeDesign,
+            grandTotal: grandTotal, isMinApplied: grandTotalRaw < minOrder, tiers: tierLog, yieldLabel: bestLabel ? `Yield Box: ${bestLabel}` : "Area Curve"
+        },
+        cost: {
+            total: subTotal + riskBuffer,
+            breakdown: { rawBlanks: rawMat, wasteCost: wasteCost, wastePct: (wasteFactor - 1) * 100, totalInk: totalInk, costSetup: costCutSetup, costCut: costCutLabor + costCutMach, costRound: costRound, runHrs: runHrsCNC + printHrs, costMachine: costPrintMach + costCutMach, costOp: costPrintOp + costCutLabor + costRound, riskCost: riskBuffer, riskPct: (riskFactor - 1) * 100 }
+        },
+        metrics: { margin: (grandTotal - (subTotal + riskBuffer)) / grandTotal }
+    };
+}
+
+
+========================================
+FILE: logic_banner.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Vinyl Banners
+ * Pure Area-Curve Lookup Math (Strict Blue Sheet 13oz Targets)
+ */
+function calculateBanner(inputs, data) {
+    // "Round up to nearest whole number for sq ft" per Blue Sheet notes
+    const sqft = Math.ceil((inputs.w * inputs.h) / 144); 
+    let baseRate = 0;
+
+    // 1. Blue Sheet Area Curve Logic
+    const is1ft = (inputs.w === 12 || inputs.h === 12);
+    
+    if (is1ft) {
+        baseRate = parseFloat(data.BAN13_T1_Rate) || 6.50;
+    } else if (sqft < 10) {
+        baseRate = parseFloat(data.BAN13_T2_Rate) || 6.00;
+    } else {
+        baseRate = parseFloat(data.BAN13_T3_Rate) || 5.00;
+    }
+
+    // 2. Base Unit Price & Per-Banner Minimum ($25 per Blue Sheet)
+    let unitPrint = baseRate * sqft;
+    if (unitPrint < 25) {
+        unitPrint = 25;
+    }
+
+    // 3. Double Sided (Exact 2x Multiplier per Blue Sheet)
+    if (inputs.sides === 2) {
+        unitPrint *= 2;
+    }
+
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 4. Volume Discount (10+ Qty = 5% Off)
+    if (inputs.qty >= 10) {
+        retailPrint *= 0.95;
+    }
+
+    // 5. Global Shop Minimum Guard ($50)
+    const minOrder = parseFloat(data.Retail_Min_Order) || 50;
+    let grandTotal = Math.max(retailPrint, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            grandTotal: grandTotal,
+            isMinApplied: retailPrint < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: logic_decal.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Decals & Stickers
+ * Pure SqFt Lookup + Material Specific Base Rates
+ */
+function calculateDecal(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    
+    // 1. Material Base Rate Lookup
+    let baseRate = 0;
+    if (inputs.material === 'Cast') baseRate = parseFloat(data.Retail_Price_Cast_SqFt) || 14.00;
+    else if (inputs.material === 'Clear') baseRate = parseFloat(data.Retail_Price_Clear_SqFt) || 10.00;
+    else if (inputs.material === 'Translucent') baseRate = parseFloat(data.Retail_Price_Trans_SqFt) || 10.00;
+    else if (inputs.material === 'Reflective') baseRate = parseFloat(data.Retail_Price_Reflective_SqFt) || 15.00;
+    else baseRate = parseFloat(data.Retail_Price_Standard_SqFt) || 8.00; // Standard fallback
+
+    let unitPrint = baseRate * sqft;
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 2. Volume Discounts
+    let discPct = 0;
+    if (inputs.qty >= (parseFloat(data.Tier_3_Qty) || 500)) discPct = parseFloat(data.Tier_3_Disc) || 0.20;
+    else if (inputs.qty >= (parseFloat(data.Tier_2_Qty) || 100)) discPct = parseFloat(data.Tier_2_Disc) || 0.10;
+    else if (inputs.qty >= (parseFloat(data.Tier_1_Qty) || 50)) discPct = parseFloat(data.Tier_1_Disc) || 0.05;
+
+    retailPrint *= (1 - discPct);
+
+    // 3. Shop Minimum
+    const minOrder = parseFloat(data.Retail_Min_Order) || 35;
+    let grandTotal = Math.max(retailPrint, minOrder);
+
+    return {
+        retail: { unitPrice: grandTotal / inputs.qty, printTotal: retailPrint, grandTotal: grandTotal, isMinApplied: retailPrint < minOrder },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: cost_yard.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Yard Signs (v3.1 - Dual Track)
+ * Implements 3-Tier Stake Pricing Logic
+ */
+
+function calculateYardSign(inputs, data) {
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    const baseSS = parseFloat(data.Retail_Price_Sign_SS || 25.00);
+    const adderDS = parseFloat(data.Retail_Price_Sign_DS || 2.50);
+
+    // Dynamic Stake Pricing (3 Tiers)
+    const stk1Price = parseFloat(data.Retail_Stake_T1_Price || 2.00);
+    const stkT2Q = parseFloat(data.Retail_Stake_T2_Qty || 50);
+    const stkT2P = parseFloat(data.Retail_Stake_T2_Price || 1.75);
+    const stkT3Q = parseFloat(data.Retail_Stake_T3_Qty || 100);
+    const stkT3P = parseFloat(data.Retail_Stake_T3_Price || 1.50);
+
+    let activeStakePrice = stk1Price;
+    if (inputs.qty >= stkT3Q) activeStakePrice = stkT3P;
+    else if (inputs.qty >= stkT2Q) activeStakePrice = stkT2P;
+
+    // Print Tier Logic
+    let appliedBase = baseSS;
+    let i = 1;
+    const tierLog = [];
+    while(data[`Tier_${i}_Qty`]) {
+        const tQty = parseFloat(data[`Tier_${i}_Qty`]);
+        const tPrice = parseFloat(data[`Tier_${i}_Price`] || 0);
+        if (inputs.qty >= tQty) appliedBase = tPrice;
+        
+        let rowStakePrice = stk1Price;
+        if (tQty >= stkT3Q) rowStakePrice = stkT3P;
+        else if (tQty >= stkT2Q) rowStakePrice = stkT2P;
+
+        const rowUnit = tPrice + (inputs.sides === 2 ? adderDS : 0) + (inputs.hasStakes ? rowStakePrice : 0);
+        tierLog.push({ q: tQty, base: tPrice, unit: rowUnit });
+        i++;
+    }
+
+    const isCustom = (appliedBase === 0);
+    const unitPrint = appliedBase + (inputs.sides === 2 ? adderDS : 0);
+    const totalPrint = unitPrint * inputs.qty;
+    const unitStake = inputs.hasStakes ? activeStakePrice : 0;
+    const totalStake = unitStake * inputs.qty;
+
+    // Fees
+    const feeSetupBase = parseFloat(data.Retail_Fee_Setup || 15.00);
+    const feeDesignBase = parseFloat(data.Retail_Fee_Design || 45.00);
+    const totalSetup = inputs.setupPerFile ? (feeSetupBase * inputs.files) : feeSetupBase;
+    const totalDesign = inputs.incDesign ? (feeDesignBase * inputs.files) : 0;
+
+    const grandTotalRaw = totalPrint + totalStake + totalSetup + totalDesign;
+    const minOrder = parseFloat(data.Retail_Min_Order || 50);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+    const isMinApplied = grandTotalRaw < minOrder;
+
+    // --- 2. COST ENGINE (PHYSICS & BOM) ---
+    const bulkTrigger = parseFloat(data.Bulk_Qty_Trigger || 1000);
+    let blankCost = parseFloat(data.Cost_Blank_Standard || 0.65);
+    if (inputs.qty >= bulkTrigger) blankCost = parseFloat(data.Cost_Blank_Bulk || 0.65);
+
+    const rawBlanks = blankCost * inputs.qty;
+    const wastePct = parseFloat(data.Waste_Factor || 1.10);
+    const wasteCost = rawBlanks * (wastePct - 1);
+    const totalMat = rawBlanks + wasteCost; 
+
+    const areaSqFt = (24*18)/144;
+    const totalArea = areaSqFt * inputs.sides * inputs.qty;
+    const totalInk = totalArea * parseFloat(data.Cost_Ink_Latex || 0.16);
+
+    const costStakeUnit = inputs.hasStakes ? parseFloat(data.Cost_Stake || 0.65) : 0;
+    const totalStakeCost = costStakeUnit * inputs.qty;
+
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const setupMins = parseFloat(data.Time_Setup_Job || 15) + parseFloat(data.Time_Handling || 5);
+    const costSetupCost = (setupMins / 60) * rateOp;
+
+    const bedCap = parseFloat(data.Printer_Bed_Capacity || 3);
+    const speed = parseFloat(data.Machine_Speed_LF_Hr || 25);
+    const lfPerSet = 2.0; 
+    const totalRunHrs = ((lfPerSet / bedCap / speed) * inputs.sides) * inputs.qty;
+
+    const costMachine = totalRunHrs * parseFloat(data.Rate_Machine_Flatbed || 45);
+    const attnRatio = parseFloat(data.Labor_Attendance_Ratio || 0.10);
+    const costOpPrint = totalRunHrs * rateOp * attnRatio;
+
+    const subTotal = totalMat + totalInk + totalStakeCost + costMachine + costOpPrint + costSetupCost;
+    
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+    const riskBuffer = subTotal * (riskFactor - 1);
+    const totalCost = subTotal; 
+
+    return {
+        retail: {
+            unitPrice: (totalPrint + totalStake) / inputs.qty,
+            printTotal: totalPrint,
+            stakeTotal: totalStake,
+            setupFee: totalSetup,
+            designFee: totalDesign,
+            grandTotal: grandTotal,
+            isCustom: isCustom,
+            isMinApplied: isMinApplied,
+            tiers: tierLog
+        },
+        cost: {
+            total: totalCost,
+            breakdown: {
+                rawBlanks: rawBlanks,
+                wasteCost: wasteCost,           
+                wastePct: (wastePct - 1) * 100, 
+                stakeCost: totalStakeCost,
+                totalInk: totalInk,
+                costSetup: costSetupCost,
+                runHrs: totalRunHrs,
+                costMachine: costMachine,
+                costOp: costOpPrint,
+                riskCost: riskBuffer,           
+                riskPct: (riskFactor - 1) * 100 
+            }
+        },
+        metrics: { margin: (grandTotal - totalCost) / grandTotal }
+    };
+}
+
+// ==========================================
+// SIMULATOR CONFIGURATION SCHEMA
+// ==========================================
+window.YARD_CONFIG = {
+    tab: 'PROD_Yard_Signs',
+    engine: calculateYardSign,
+    controls: [
+      { id: 'sides', label: 'Print Sides', type: 'select', opts: [{v:1, t:'Single Sided'}, {v:2, t:'Double Sided'}] },
+      { id: 'hasStakes', label: 'Wire Stakes', type: 'toggle', def: true }, 
+      { id: 'files', label: 'Files', type: 'number', def: 1 },
+      { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false },
+      { id: 'setupPerFile', label: 'Setup / File', type: 'toggle', def: false }
+    ],
+    retails: [
+      { heading: 'Print Base (Coroplast)', key: 'Retail_Price_Sign_SS', label: 'Base Sign ($)' },
+      { key: 'Tier_1_Qty', label: 'Tier 1 Trigger (Qty)' },
+      { key: 'Tier_1_Price', label: 'Tier 1 Base ($)' },
+      { heading: 'Hardware (Wire Stakes)', key: 'Retail_Stake_T1_Price', label: 'Stake 1-49 ($)' },
+      { key: 'Retail_Stake_T2_Qty', label: 'Stake T2 Qty' },
+      { key: 'Retail_Stake_T2_Price', label: 'Stake T2 ($)' },
+      { key: 'Retail_Stake_T3_Qty', label: 'Stake T3 Qty' },
+      { key: 'Retail_Stake_T3_Price', label: 'Stake T3 ($)' }
+    ],
+    costs: [
+      { key: 'Cost_Blank_Standard', label: 'Blank Cost ($)' },
+      { key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+      { key: 'Rate_Operator', label: 'Operator ($/Hr)' },
+      { key: 'Rate_Machine_Flatbed', label: 'R1000 ($/Hr)' },
+      { key: 'Machine_Speed_LF_Hr', label: 'Print Spd (LF/hr)' },
+      { key: 'Printer_Bed_Capacity', label: 'Bed Qty (Nesting)' },
+      { key: 'Time_Setup_Job', label: 'Setup (Mins)' },
+      { key: 'Time_Handling', label: 'Handling (Mins)' },
+      { key: 'Waste_Factor', label: 'Waste (1.x)' },
+      { key: 'Factor_Risk', label: 'Risk (1.x)' },
+      { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' }
+    ],
+    
+    renderReceipt: function(data, fmt) {
+      let retailHTML = `
+        <div>
+          <h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+          <div class="space-y-1 text-xs text-gray-700">
+            <div class="flex justify-between" title="Strict market value based on square footage and Blue Sheet tiers."><span class="cursor-help border-b border-dotted border-gray-400">Base Print:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+            ${data.retail.stakeTotal > 0 ? `<div class="flex justify-between"><span>Wire Stakes:</span> <span>${fmt(data.retail.stakeTotal)}</span></div>` : ''}
+            <div class="flex justify-between"><span>Setup Fee:</span> <span>${fmt(data.retail.setupFee || 0)}</span></div>
+            ${data.retail.designFee > 0 ? `<div class="flex justify-between"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+            <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+          </div>
+        </div>
+      `;
+      let costHTML = `
+        <div>
+          <h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+          <div class="space-y-1 text-xs text-gray-700">`;
+      if (data.cost.breakdown) {
+        const b = data.cost.breakdown;
+        costHTML += `
+            <div class="flex justify-between" title="Pure cost of Coroplast sheets (Quantity x Base Cost)."><span class="cursor-help border-b border-dotted border-gray-400">Raw Blanks:</span> <span>${fmt(b.rawBlanks)}</span></div>
+            ${b.stakeCost > 0 ? `<div class="flex justify-between"><span>Stakes:</span> <span>${fmt(b.stakeCost)}</span></div>` : ''}
+            <div class="flex justify-between" title="Calculated by exact square footage and Matrix Ink Cost."><span class="cursor-help border-b border-dotted border-gray-400">Ink:</span> <span>${fmt(b.totalInk)}</span></div>
+            <div class="flex justify-between" title="One-time flat fee for job setup and material handling."><span class="cursor-help border-b border-dotted border-gray-400">Setup Labor:</span> <span>${fmt(b.costSetup)}</span></div>
+            <div class="flex justify-between" title="Total hours the substrate sits on the printer/router bed."><span class="cursor-help border-b border-dotted border-gray-400">Machine Run (${b.runHrs ? b.runHrs.toFixed(2) : 0}h):</span> <span>${fmt(b.costMachine)}</span></div>
+            <div class="flex justify-between" title="Operator labor adjusted by the Attendance Ratio."><span class="cursor-help border-b border-dotted border-gray-400">Operator (Attn Ratio):</span> <span>${fmt(b.costOp)}</span></div>
+            <div class="border-t border-gray-200 mt-2 pt-1"></div>
+            <h4 class="text-[9px] font-bold text-gray-500 uppercase mb-1">Additives & Risk</h4>
+            <div class="flex justify-between text-red-600" title="Physical material expected to be lost to drops or cuts. This IS added to your total cost."><span class="cursor-help border-b border-dotted border-red-400">Material Waste (${b.wastePct ? b.wastePct.toFixed(0) : 10}%):</span> <span>+ ${fmt(b.wasteCost)}</span></div>
+            <div class="flex justify-between text-orange-500 opacity-80" title="Suggested financial buffer for mistakes. This is an INDICATOR ONLY and is NOT added to your hard cost."><span class="cursor-help border-b border-dotted border-orange-300">Suggested Risk Buffer (${b.riskPct ? b.riskPct.toFixed(0) : 5}%):</span> <span>(+ ${fmt(b.riskCost)})</span></div>
+        `;
+      }
+      costHTML += `<div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div></div></div>`;
+      return retailHTML + costHTML;
+    }
+};
+
+
+========================================
+FILE: cost_pvc.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: PVC Signs (v1.6.2)
+ * Bug Fix: Corrected split array index for dimension parsing.
+ */
+function calculatePVC(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const totalSqFt = sqft * inputs.qty;
+    
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    const reqShort = Math.min(inputs.w, inputs.h);
+    const reqLong = Math.max(inputs.w, inputs.h);
+    const sideStr = inputs.sides === 2 ? 'DS' : 'SS';
+    const thickStr = inputs.thickness === '6mm' ? '6' : '3';
+    
+    let bestFitArea = Infinity;
+    let bestP1 = null, bestP10 = null, bestLabel = "";
+
+    // Bounding Box Search
+    Object.keys(data).forEach(key => {
+        if (key.startsWith(`RET_PVC${thickStr}_`) && key.endsWith(`_${sideStr}_1`)) {
+            const dimStr = key.split('_')[2]; 
+            const stdShort = parseInt(dimStr.substring(0, 2), 10);
+            const stdLong = parseInt(dimStr.substring(2), 10);
+            const stdArea = stdShort * stdLong;
+
+            if (reqShort <= stdShort && reqLong <= stdLong && stdArea < bestFitArea) {
+                bestFitArea = stdArea;
+                bestP1 = parseFloat(data[key]);
+                bestP10 = parseFloat(data[key.replace(/_1$/, '_10')]) || bestP1;
+                bestLabel = `${stdShort}x${stdLong}`;
+            }
+        }
+    });
+
+    let baseUnitPrice = 0;
+    const t1Qty = parseFloat(data.Tier_1_Qty || 10);
+    const tierLog = [];
+
+    if (bestP1 !== null) {
+        baseUnitPrice = inputs.qty >= t1Qty ? bestP10 : bestP1;
+        tierLog.push({ q: 1, base: bestP1, unit: bestP1 }, { q: t1Qty, base: bestP10, unit: bestP10 });
+    } else {
+        let baseSqFtRate = 0;
+        let signMinPrice = inputs.thickness === '3mm' ? parseFloat(data.PVC3_T1_Min || 33.00) : parseFloat(data.PVC6_T1_Min || 33.00);
+
+        if (inputs.thickness === '3mm') {
+            if (sqft <= parseFloat(data.PVC3_T2_Max || 5.99)) baseSqFtRate = parseFloat(data.PVC3_T2_Rate || 13.20);
+            else if (sqft <= parseFloat(data.PVC3_T3_Max || 11.99)) baseSqFtRate = parseFloat(data.PVC3_T3_Rate || 8.40);
+            else baseSqFtRate = parseFloat(data.PVC3_T4_Rate || 7.80);
+        } else {
+            if (sqft <= parseFloat(data.PVC6_T2_Max || 5.99)) baseSqFtRate = parseFloat(data.PVC6_T2_Rate || 22.00);
+            else if (sqft <= parseFloat(data.PVC6_T3_Max || 11.99)) baseSqFtRate = parseFloat(data.PVC6_T3_Rate || 14.00);
+            else baseSqFtRate = parseFloat(data.PVC6_T4_Rate || 13.00);
+        }
+
+        let rawBase = baseSqFtRate * sqft;
+        if (rawBase < signMinPrice) rawBase = signMinPrice;
+        if (inputs.sides === 2) rawBase *= (1 + parseFloat(data.Retail_Adder_DS_Mult || 0.50));
+        
+        const discPct = inputs.qty >= t1Qty ? parseFloat(data.Tier_1_Disc || 0.05) : 0;
+        baseUnitPrice = rawBase * (1 - discPct);
+
+        tierLog.push(
+            { q: 1, base: rawBase, unit: rawBase },
+            { q: t1Qty, base: rawBase, unit: rawBase * (1 - parseFloat(data.Tier_1_Disc || 0.05)) }
+        );
+    }
+
+    let retailPrint = baseUnitPrice * inputs.qty;
+    let routerFee = 0;
+    if (inputs.shape === 'Easy') routerFee = parseFloat(data.Retail_Fee_Router_Easy || 30.00);
+    else if (inputs.shape === 'Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard || 50.00);
+
+    const feeDesign = inputs.incDesign ? parseFloat(data.Retail_Fee_Design || 45) : 0;
+    
+    let lamDeduction = 0;
+    if (typeof inputs.lam !== 'undefined' && !inputs.lam) {
+        lamDeduction = retailPrint * 0.10;
+    }
+
+    const grandTotalRaw = (retailPrint - lamDeduction) + routerFee + feeDesign;
+    const minOrder = bestP1 !== null ? 0 : parseFloat(data.Retail_Min_Order || 50);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    tierLog.forEach(t => t.unit = (t.unit * t.q + routerFee) / t.q);
+
+    // --- 2. COST ENGINE ---
+    const wastePct = parseFloat(data.Waste_Factor || 1.15);
+    const attnRatio = parseFloat(data.Labor_Attendance_Ratio || 0.10);
+    const rawSheetCost = inputs.thickness === '3mm' ? parseFloat(data.Cost_Stock_3mm_4x8 || 29.09) : parseFloat(data.Cost_Stock_6mm_4x8 || 58.37);
+
+    const costSubstrate = (totalSqFt / 32) * rawSheetCost * wastePct;
+    const costInk = totalSqFt * parseFloat(data.Cost_Ink_Latex || 0.16) * inputs.sides;
+
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateShop = parseFloat(data.Rate_Shop_Labor || 20);
+    const rateCNC = parseFloat(data.Rate_CNC_Labor || 25);
+    const rateMachFB = parseFloat(data.Rate_Machine_Flatbed || 10);
+
+    const costPrepressPrint = (parseFloat(data.Time_Prepress_Print || 10) / 60) * rateOp;
+    const costMachSetupPrint = ((parseFloat(data.Time_Setup_Printer || 5) + parseFloat(data.Time_Handling || 5)) / 60) * rateOp;
+    const printHrs = ((totalSqFt / 2) / parseFloat(data.Machine_Speed_LF_Hr || 25)) * inputs.sides;
+    const costPrintOp = printHrs * rateOp * attnRatio;
+    const costPrintMach = printHrs * rateMachFB;
+
+    let cutHrs = 0, cutMach = 0, cutLabor = 0, costPrepressCNC = 0, costMachSetupCNC = 0;
+    if (inputs.shape === 'Rectangle') {
+        const roundMins = inputs.rounded ? parseFloat(data.Time_Round_Setup || 5) + (inputs.qty * 4 * parseFloat(data.Time_Round_Corner || 0.5)) : 0;
+        cutHrs = (parseFloat(data.Time_Shear_Setup || 5) + (inputs.qty * parseFloat(data.Time_Shear_Cut || 1)) + roundMins) / 60;
+        cutLabor = cutHrs * rateShop;
+    } else {
+        costPrepressCNC = (parseFloat(data.Time_Prepress_CNC || 15) / 60) * rateCNC;
+        costMachSetupCNC = (parseFloat(data.Time_Setup_CNC || 10) / 60) * rateCNC;
+        cutHrs = (totalSqFt * (inputs.shape === 'Easy' ? parseFloat(data.Time_CNC_Easy_SqFt || 1) : parseFloat(data.Time_CNC_Complex_SqFt || 2))) / 60;
+        cutMach = cutHrs * parseFloat(data.Rate_Machine_CNC || 10);
+        cutLabor = cutHrs * rateCNC * attnRatio;
+    }
+
+    const subTotal = costSubstrate + costInk + costPrepressPrint + costMachSetupPrint + costPrintOp + costPrintMach + costPrepressCNC + costMachSetupCNC + cutMach + cutLabor;
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+    const riskBuffer = subTotal * (riskFactor - 1);
+
+    return {
+        retail: {
+            unitPrice: ((retailPrint - lamDeduction) + routerFee) / inputs.qty, printTotal: retailPrint - lamDeduction, routerFee: routerFee, designFee: feeDesign,
+            grandTotal: grandTotal, isMinApplied: grandTotalRaw < minOrder, tiers: tierLog, yieldLabel: bestLabel ? `Yield Box: ${bestLabel}` : "Area Curve"
+        },
+        cost: {
+            total: subTotal + riskBuffer,
+            breakdown: { rawSubstrate: costSubstrate, rawInk: costInk, costPrepressPrint: costPrepressPrint, costMachSetupPrint: costMachSetupPrint, costPrintLabor: costPrintOp, costPrintMach: costPrintMach, costPrepressCNC: costPrepressCNC, costMachSetupCNC: costMachSetupCNC, costCutMach: cutMach, costCutLabor: cutLabor, riskCost: riskBuffer, wastePct: (wastePct - 1) * 100, riskPct: (riskFactor - 1) * 100 }
+        },
+        metrics: { margin: (grandTotal - (subTotal + riskBuffer)) / grandTotal }
+    };
+}
+// ==========================================
+// SIMULATOR CONFIGURATION SCHEMA
+// ==========================================
+window.PVC_CONFIG = {
+    tab: 'PROD_PVC_Signs',
+    engine: calculatePVC,
+    controls: [
+        { id: 'w', label: 'Width (in)', type: 'number', def: 24 },
+        { id: 'h', label: 'Height (in)', type: 'number', def: 18 },
+        { id: 'thickness', label: 'Thickness', type: 'select', opts: [{v:'3mm', t:'3mm PVC'}, {v:'6mm', t:'6mm PVC'}] },
+        { id: 'sides', label: 'Print Sides', type: 'select', opts: [{v:1, t:'1-Sided'}, {v:2, t:'2-Sided'}] },
+        { id: 'shape', label: 'Cut Type', type: 'select', opts: [{v:'Rectangle', t:'Square Cut'}, {v:'Easy', t:'CNC Simple'}, {v:'Complex', t:'CNC Complex'}] },
+        { id: 'lam', label: 'Apply Laminate', type: 'toggle', def: true },
+        { id: 'files', label: 'Files', type: 'number', def: 1 },
+        { id: 'setupPerFile', label: 'Setup / File', type: 'toggle', def: false },
+        { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    retails: [
+        { heading: '3mm PVC Area Curves', key: 'PVC3_T1_Rate', label: 'T1 Rate ($/sf)' },
+        { key: 'PVC3_T2_Rate', label: 'T2 Rate ($/sf)' },
+        { heading: '6mm PVC Area Curves', key: 'PVC6_T1_Rate', label: 'T1 Rate ($/sf)' },
+        { key: 'PVC6_T2_Rate', label: 'T2 Rate ($/sf)' },
+        { heading: 'Adders & Fees', key: 'Retail_Adder_DS_Mult', label: 'DS Adder Mult (1.x)' },
+        { key: 'Retail_Lam_Deduct', label: 'No Lam Deduct (%)' },
+        { key: 'Retail_Fee_Router_Easy', label: 'CNC Easy Fee' },
+        { key: 'Retail_Fee_Router_Hard', label: 'CNC Complex Fee' },
+        { heading: 'Discounts', key: 'Tier_1_Qty', label: 'T1 Discount Qty' },
+        { key: 'Tier_1_Disc', label: 'T1 Discount (%)' }
+    ],
+    costs: [
+        { heading: 'Materials', key: 'Cost_Stock_3mm_4x8', label: '3mm 4x8 Sheet ($)' },
+        { key: 'Cost_Stock_6mm_4x8', label: '6mm 4x8 Sheet ($)' },
+        { key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+        { heading: 'Machine Speeds & Time', key: 'Machine_Speed_LF_Hr', label: 'Print Spd (LF/hr)' },
+        { key: 'Time_Prepress_Print', label: 'Print Prepress (Mins)' },
+        { key: 'Time_Setup_Printer', label: 'Print Load (Mins)' },
+        { key: 'Time_Handling', label: 'Handling (Mins)' },
+        { key: 'Time_Prepress_CNC', label: 'CNC Prepress (Mins)' },
+        { key: 'Time_Setup_CNC', label: 'CNC Setup (Mins)' },
+        { heading: 'Rates & Overhead', key: 'Rate_Operator', label: 'Print Op ($/Hr)' },
+        { key: 'Rate_CNC_Labor', label: 'CNC Op ($/Hr)' },
+        { key: 'Rate_Machine_Flatbed', label: 'Printer Mach ($/Hr)' },
+        { key: 'Rate_Machine_CNC', label: 'Router Mach ($/Hr)' },
+        { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' },
+        { key: 'Waste_Factor', label: 'Waste Buffer' }
+    ],
+    renderReceipt: function(data, fmt) {
+        let retailHTML = `<div><h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+        <div class="space-y-1 text-xs text-gray-700">
+        <div class="flex justify-between"><span>Base Print:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+        ${data.retail.routerFee > 0 ? `<div class="flex justify-between text-orange-700"><span>CNC Routing Fee:</span> <span>${fmt(data.retail.routerFee)}</span></div>` : ''}
+        <div class="flex justify-between"><span>Setup Fee:</span> <span>${fmt(data.retail.setupFee || 0)}</span></div>
+        ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+        <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+        </div></div>`;
+
+        let costHTML = `<div class="mt-6"><h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+        <div class="space-y-1 text-xs text-gray-700">`;
+        if (data.cost.breakdown) {
+            const b = data.cost.breakdown;
+            costHTML += `
+            <div class="flex justify-between"><span>Raw Blanks/Sheets:</span> <span>${fmt(b.rawBlanks)}</span></div>
+            <div class="flex justify-between"><span>Ink:</span> <span>${fmt(b.totalInk)}</span></div>
+            <div class="flex justify-between"><span>Setup Labor:</span> <span>${fmt(b.costSetup)}</span></div>
+            <div class="flex justify-between"><span>Machine Run (${b.runHrs ? b.runHrs.toFixed(2) : 0}h):</span> <span>${fmt(b.costMachine)}</span></div>
+            <div class="flex justify-between"><span>Operator Labor (Attn Ratio):</span> <span>${fmt(b.costOp)}</span></div>
+            <div class="border-t border-gray-200 mt-2 pt-1"></div>
+            <div class="flex justify-between text-red-600"><span>Material Waste (${b.wastePct ? b.wastePct.toFixed(0) : 10}%):</span> <span>+ ${fmt(b.wasteCost)}</span></div>
+            <div class="flex justify-between text-orange-500 opacity-80"><span>Suggested Risk Buffer (${b.riskPct ? b.riskPct.toFixed(0) : 5}%):</span> <span>(+ ${fmt(b.riskCost)})</span></div>`;
+        }
+        costHTML += `<div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div></div></div>`;
+        return retailHTML + costHTML;
+    }
+};
+
+
+========================================
+FILE: cost_decal.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Decals & Stickers (v2.0 - Dual Track)
+ * Implements 3-Stage Roll Physics, Contour Weeding, and Pre-Mask Logic.
+ */
+
+function calculateDecal(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const totalSqFt = sqft * inputs.qty;
+    const perimeterLF = ((inputs.w + inputs.h) * 2 / 12) * inputs.qty;
+
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    const baseRate = inputs.material === 'Cast' 
+        ? parseFloat(data.Retail_Price_Cast_SqFt || 14) 
+        : parseFloat(data.Retail_Price_Cal_SqFt || 8);
+
+    // Volume Tiers
+    let discPct = 0;
+    let currentBestTier = 0;
+    let i = 1;
+    const tierLog = [];
+    while(data[`Tier_${i}_Qty`]) {
+        const tQty = parseFloat(data[`Tier_${i}_Qty`]);
+        const tDisc = parseFloat(data[`Tier_${i}_Disc`] || 0);
+        tierLog.push({ q: tQty, d: tDisc });
+        if (inputs.qty >= tQty) currentBestTier = tDisc;
+        i++;
+    }
+    discPct = currentBestTier;
+
+    let retailPrint = (baseRate * (1 - discPct)) * totalSqFt;
+
+    // Finishing Adders
+    let retailContour = 0;
+    let retailWeed = 0;
+    let retailMask = 0;
+    
+    if (inputs.shape !== 'Square') {
+        retailContour = retailPrint * parseFloat(data.Retail_Cut_Contour_Add || 0.25);
+        if (inputs.shape === 'Contour Complex') {
+            retailWeed = totalSqFt * parseFloat(data.Retail_Weed_Complex || 2.50);
+        }
+    }
+    
+    if (inputs.mask) {
+        retailMask = totalSqFt * parseFloat(data.Retail_Adder_Mask_SqFt || 1.00); // Standard $1/sqft retail adder for tape
+    }
+
+    const feeDesign = inputs.incDesign ? parseFloat(data.Retail_Fee_Design || 45) : 0;
+    const feeSetupBase = parseFloat(data.Retail_Fee_Setup || 15);
+    const feeSetup = inputs.setupPerFile ? (feeSetupBase * inputs.files) : feeSetupBase;
+
+    const grandTotalRaw = retailPrint + retailContour + retailWeed + retailMask + feeDesign + feeSetup;
+    const minOrder = parseFloat(data.Retail_Min_Order || 35);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    // UI Tier Log (For Simulator)
+    const simTiers = tierLog.map(t => {
+        const trPrint = (baseRate * (1 - t.d)) * (sqft * t.q);
+        const trContour = inputs.shape !== 'Square' ? (trPrint * parseFloat(data.Retail_Cut_Contour_Add || 0.25)) : 0;
+        const trWeed = inputs.shape === 'Contour Complex' ? (sqft * t.q * parseFloat(data.Retail_Weed_Complex || 2.50)) : 0;
+        const trMask = inputs.mask ? (sqft * t.q * parseFloat(data.Retail_Adder_Mask_SqFt || 1.00)) : 0;
+        const total = Math.max(trPrint + trContour + trWeed + trMask + feeSetup + feeDesign, minOrder);
+        return { q: t.q, base: baseRate * (1 - t.d), unit: total / t.q };
+    });
+
+    // --- 2. COST ENGINE (PHYSICS & BOM) ---
+    const wastePct = parseFloat(data.Waste_Factor || 1.20);
+
+    // Material Costs
+    const costVinylRaw = inputs.material === 'Cast' ? parseFloat(data.Cost_Vin_Cast || 1.30) : parseFloat(data.Cost_Vin_Cal || 0.21);
+    const costLamRaw = inputs.lam ? (inputs.material === 'Cast' ? parseFloat(data.Cost_Lam_Cast || 0.96) : parseFloat(data.Cost_Lam_Cal || 0.36)) : 0;
+    
+    const costVinyl = totalSqFt * costVinylRaw * wastePct;
+    const costLam = totalSqFt * costLamRaw * wastePct;
+    const costInk = totalSqFt * parseFloat(data.Cost_Ink_Latex || 0.16);
+
+    // Labor & Machines
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateShop = parseFloat(data.Rate_Shop_Labor || 20);
+    const rateMachPrint = parseFloat(data.Rate_Machine_Print || 5);
+    const rateMachCut = parseFloat(data.Rate_Machine_Cut || 5);
+
+    // Setup
+    const setupMins = parseFloat(data.Time_Setup_Job || 15);
+    const costSetup = (setupMins / 60) * rateOp;
+
+    // Stage 1: Print
+    const speedPrint = parseFloat(data.Speed_Print_Roll || 150);
+    const printHrs = totalSqFt / speedPrint;
+    const attnRatio = parseFloat(data.Labor_Attendance_Ratio || 0.10);
+    const costPrintOp = printHrs * rateOp * attnRatio;
+    const costPrintMach = printHrs * rateMachPrint;
+
+    // Stage 2: Laminate
+    let lamHrs = 0;
+    let costLamOp = 0;
+    if (inputs.lam) {
+        const speedLam = parseFloat(data.Speed_Lam_Roll || 300);
+        lamHrs = totalSqFt / speedLam;
+        costLamOp = lamHrs * rateShop; // 100% attendance required to feed roll
+    }
+
+    // Stage 3: Cut & Weed
+    let cutHrs = 0, costCutOp = 0, costCutMach = 0;
+    let weedHrs = 0, costWeedOp = 0;
+
+    if (inputs.shape === 'Square') {
+        const timeHandMins = perimeterLF * parseFloat(data.Time_Cut_Hand || 0.25);
+        cutHrs = timeHandMins / 60;
+        costCutOp = cutHrs * rateShop;
+    } else {
+        const speedCutHr = parseFloat(data.Speed_Cut_Graphtec || 50);
+        cutHrs = totalSqFt / speedCutHr;
+        costCutMach = cutHrs * rateMachCut;
+        costCutOp = cutHrs * rateOp * 0.25; 
+
+        const weedSpeed = inputs.shape === 'Contour Complex' ? parseFloat(data.Time_Weed_Complex || 8) : parseFloat(data.Time_Weed_Simple || 2);
+        weedHrs = (totalSqFt * weedSpeed) / 60;
+        costWeedOp = weedHrs * rateShop;
+    }
+    
+    // Stage 4: Masking (App Tape)
+    let costTape = 0, costMaskOp = 0;
+    if (inputs.mask) {
+        costTape = totalSqFt * parseFloat(data.Cost_Transfer_Tape || 0.15) * wastePct;
+        const maskSpeed = parseFloat(data.Time_Mask_SqFt || 1); 
+        const maskHrs = (totalSqFt * maskSpeed) / 60;
+        costMaskOp = maskHrs * rateShop;
+    }
+
+    const subTotal = costVinyl + costLam + costInk + costSetup + costPrintOp + costPrintMach + costLamOp + costCutOp + costCutMach + costWeedOp + costTape + costMaskOp;
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+    const riskBuffer = subTotal * (riskFactor - 1);
+
+    return {
+        retail: {
+            unitPrice: (retailPrint + retailContour + retailWeed + retailMask) / inputs.qty,
+            printTotal: retailPrint,
+            contourFee: retailContour,
+            weedFee: retailWeed,
+            maskFee: retailMask,
+            setupFee: feeSetup,
+            designFee: feeDesign,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder,
+            tiers: simTiers
+        },
+        cost: {
+            total: subTotal,
+            breakdown: {
+                rawVinyl: costVinyl,
+                rawLam: costLam,
+                rawTape: costTape,
+                totalInk: costInk,
+                costSetup: costSetup,
+                costPrint: costPrintOp + costPrintMach,
+                costLamRun: costLamOp,
+                costCut: costCutOp + costCutMach,
+                costWeed: costWeedOp,
+                costMask: costMaskOp,
+                riskCost: riskBuffer,
+                wastePct: (wastePct - 1) * 100,
+                riskPct: (riskFactor - 1) * 100
+            }
+        },
+        metrics: { margin: (grandTotal - subTotal) / grandTotal }
+    };
+}
+
+// ==========================================
+// SIMULATOR CONFIGURATION SCHEMA
+// ==========================================
+window.DECAL_CONFIG = {
+    tab: 'PROD_Decals',
+    engine: calculateDecal,
+    controls: [
+      { id: 'w', label: 'Width', type: 'number', def: 4 },
+      { id: 'h', label: 'Height', type: 'number', def: 4 },
+      { id: 'material', label: 'Material', type: 'select', opts: [{v:'Cal', t:'Standard (Cal)'}, {v:'Cast', t:'Premium (Cast)'}] },
+      { id: 'lam', label: 'Laminate', type: 'toggle', def: true },
+      { id: 'shape', label: 'Cut Method', type: 'select', opts: [{v:'Square', t:'Square / Hand Cut'}, {v:'Contour Simple', t:'Kiss Cut (Simple)'}, {v:'Contour Complex', t:'Kiss Cut (Complex)'}] },
+      { id: 'mask', label: 'Apply Pre-Mask', type: 'toggle', def: false },
+      { id: 'files', label: 'Files', type: 'number', def: 1 },
+      { id: 'setupPerFile', label: 'Setup / File', type: 'toggle', def: false },
+      { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    retails: [
+      { heading: 'Material Tiers ($/SqFt)', key: 'Retail_Price_Cal_SqFt', label: 'Calendered Rate ($)' },
+      { key: 'Retail_Price_Cast_SqFt', label: 'Cast Rate ($)' },
+      { heading: 'Finishing Markups', key: 'Retail_Cut_Contour_Add', label: 'Contour Markup (%)' },
+      { key: 'Retail_Weed_Complex', label: 'Complex Weed ($/SqFt)' },
+      { key: 'Retail_Adder_Mask_SqFt', label: 'Pre-Mask Adder ($/SqFt)' },
+      { heading: 'Volume Discounts', key: 'Tier_1_Qty', label: 'Tier 1 Trigger (Qty)' },
+      { key: 'Tier_1_Disc', label: 'Tier 1 Disc (%)' },
+      { heading: 'Flat Fees', key: 'Retail_Fee_Setup', label: 'Setup Fee ($)' },
+      { key: 'Retail_Fee_Design', label: 'Design Fee ($)' }
+    ],
+    costs: [
+      { key: 'Cost_Vin_Cal', label: 'IJ35C Vinyl ($/SqFt)' },
+      { key: 'Cost_Lam_Cal', label: 'Oraguard 210 ($/SqFt)' },
+      { key: 'Cost_Vin_Cast', label: 'IJ180 Vinyl ($/SqFt)' },
+      { key: 'Cost_Lam_Cast', label: '3M 8518 ($/SqFt)' },
+      { key: 'Cost_Transfer_Tape', label: 'App Tape ($/SqFt)' },
+      { key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+      { key: 'Rate_Operator', label: 'Operator ($/Hr)' },
+      { key: 'Rate_Shop_Labor', label: 'Shop Labor ($/Hr)' },
+      { key: 'Rate_Machine_Print', label: 'Printer Mach ($/Hr)' },
+      { key: 'Rate_Machine_Cut', label: 'Plotter Mach ($/Hr)' },
+      { key: 'Speed_Print_Roll', label: 'Print Spd (SqFt/hr)' },
+      { key: 'Speed_Lam_Roll', label: 'Lam Spd (SqFt/hr)' },
+      { key: 'Speed_Cut_Graphtec', label: 'Plot Spd (SqFt/hr)' },
+      { key: 'Time_Setup_Job', label: 'File Setup (Mins)' },
+      { key: 'Time_Cut_Hand', label: 'Hand Cut (Mins/LF)' },
+      { key: 'Time_Weed_Simple', label: 'Weed Simple (Mins/SqFt)' },
+      { key: 'Time_Weed_Complex', label: 'Weed Complex (Mins/SqFt)' },
+      { key: 'Time_Mask_SqFt', label: 'Masking (Mins/SqFt)' },
+      { key: 'Waste_Factor', label: 'Waste (1.x)' },
+      { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' }
+    ],
+    
+    renderReceipt: function(data, fmt) {
+      let retailHTML = `
+        <div>
+          <h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+          <div class="space-y-1 text-xs text-gray-700">
+            <div class="flex justify-between"><span class="border-b border-dotted border-gray-400">Base Print:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+            ${data.retail.contourFee > 0 ? `<div class="flex justify-between text-orange-700"><span>Contour Cut Adder:</span> <span>${fmt(data.retail.contourFee)}</span></div>` : ''}
+            ${data.retail.weedFee > 0 ? `<div class="flex justify-between text-pink-700"><span>Complex Weeding Adder:</span> <span>${fmt(data.retail.weedFee)}</span></div>` : ''}
+            ${data.retail.maskFee > 0 ? `<div class="flex justify-between text-teal-700"><span>Pre-Mask Adder:</span> <span>${fmt(data.retail.maskFee)}</span></div>` : ''}
+            <div class="flex justify-between"><span>Setup Fee:</span> <span>${fmt(data.retail.setupFee || 0)}</span></div>
+            ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+            <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+          </div>
+        </div>
+      `;
+      let costHTML = `
+        <div>
+          <h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+          <div class="space-y-1 text-xs text-gray-700">`;
+      if (data.cost.breakdown) {
+        const b = data.cost.breakdown;
+        costHTML += `
+            <div class="flex justify-between"><span class="border-b border-dotted border-gray-400">Vinyl Material:</span> <span>${fmt(b.rawVinyl)}</span></div>
+            ${b.rawLam > 0 ? `<div class="flex justify-between"><span>Laminate Material:</span> <span>${fmt(b.rawLam)}</span></div>` : ''}
+            ${b.rawTape > 0 ? `<div class="flex justify-between"><span>Transfer Tape:</span> <span>${fmt(b.rawTape)}</span></div>` : ''}
+            <div class="flex justify-between"><span>Ink:</span> <span>${fmt(b.totalInk)}</span></div>
+            <div class="flex justify-between"><span>Setup Labor:</span> <span>${fmt(b.costSetup)}</span></div>
+            <div class="flex justify-between"><span>Print Run:</span> <span>${fmt(b.costPrint)}</span></div>
+            ${b.costLamRun > 0 ? `<div class="flex justify-between"><span>Laminating Labor:</span> <span>${fmt(b.costLamRun)}</span></div>` : ''}
+            <div class="flex justify-between"><span>Cutting Run:</span> <span>${fmt(b.costCut)}</span></div>
+            ${b.costWeed > 0 ? `<div class="flex justify-between"><span>Weeding Labor:</span> <span>${fmt(b.costWeed)}</span></div>` : ''}
+            ${b.costMask > 0 ? `<div class="flex justify-between"><span>Masking Labor:</span> <span>${fmt(b.costMask)}</span></div>` : ''}
+            <div class="border-t border-gray-200 mt-2 pt-1"></div>
+            <h4 class="text-[9px] font-bold text-gray-500 uppercase mb-1">Additives & Risk</h4>
+            <div class="flex justify-between text-red-600"><span class="border-b border-dotted border-red-400">Material Waste (${b.wastePct ? b.wastePct.toFixed(0) : 10}%):</span> <span>(Included Above)</span></div>
+            <div class="flex justify-between text-orange-500 opacity-80"><span class="border-b border-dotted border-orange-300">Suggested Risk Buffer (${b.riskPct ? b.riskPct.toFixed(0) : 5}%):</span> <span>(+ ${fmt(b.riskCost)})</span></div>
+        `;
+      }
+      costHTML += `<div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div></div></div>`;
+      return retailHTML + costHTML;
+    }
+};
+
+
+========================================
+FILE: logic_acrylic.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Acrylic Signs
+ * Pure Fixed-Tier Lookup Math + No Setup or Design Fees
+ */
+function calculateAcrylic(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const totalSqFt = sqft * inputs.qty;
+    let baseSqFtRate = 0;
+    const thick = String(inputs.thickness);
+
+    // 1. Fixed Tier Lookup (Strictly from Backend)
+    if (thick.includes('1/4') || thick.includes('0.25') || thick.includes('.25')) {
+        if (totalSqFt <= (parseFloat(data.ACR_14_T1_Max) || 0)) baseSqFtRate = parseFloat(data.ACR_14_T1_Rate) || 0;
+        else if (totalSqFt <= (parseFloat(data.ACR_14_T2_Max) || 0)) baseSqFtRate = parseFloat(data.ACR_14_T2_Rate) || 0;
+        else baseSqFtRate = parseFloat(data.ACR_14_T3_Rate) || 0;
+    } 
+    else if (thick.includes('1/2') || thick.includes('0.5') || thick.includes('.5')) {
+        if (totalSqFt <= (parseFloat(data.ACR_12_T1_Max) || 0)) baseSqFtRate = parseFloat(data.ACR_12_T1_Rate) || 0;
+        else baseSqFtRate = parseFloat(data.ACR_12_T2_Rate) || 0;
+    } 
+    else if (thick.includes('3/4') || thick.includes('0.75') || thick.includes('.75')) {
+        if (totalSqFt <= (parseFloat(data.ACR_34_T1_Max) || 0)) baseSqFtRate = parseFloat(data.ACR_34_T1_Rate) || 0;
+        else baseSqFtRate = parseFloat(data.ACR_34_T2_Rate) || 0;
+    } 
+    else if (thick.includes('1') || thick.includes('1.0')) {
+        if (totalSqFt <= (parseFloat(data.ACR_1IN_T1_Max) || 0)) baseSqFtRate = parseFloat(data.ACR_1IN_T1_Rate) || 0;
+        else baseSqFtRate = parseFloat(data.ACR_1IN_T2_Rate) || 0;
+    }
+
+    const retailPrint = baseSqFtRate * totalSqFt;
+
+    // 2. Simple Flat Fees
+    let routerFee = 0;
+    if (inputs.shape === 'CNC Simple') routerFee = parseFloat(data.Retail_Fee_Router_Easy) || 0;
+    else if (inputs.shape === 'CNC Complex' || inputs.shape === 'Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard) || 0;
+
+    const minOrder = parseFloat(data.Retail_Min_Order) || 0;
+    
+    let grandTotalRaw = retailPrint + routerFee;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            routerFee: routerFee,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: cost_coro.js
+========================================
+/**
+ * PURE PHYSICS ENGINE: Custom Coroplast (v2.3)
+ * Bug Fix: Corrected split array index for dimension parsing.
+ */
+function calculateCoro(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const totalSqFt = sqft * inputs.qty;
+    
+    // --- 1. RETAIL ENGINE (MARKET VALUE) ---
+    const reqShort = Math.min(inputs.w, inputs.h);
+    const reqLong = Math.max(inputs.w, inputs.h);
+    const sideStr = inputs.sides === 2 ? 'DS' : 'SS';
+    const thickStr = inputs.thickness === '10mm' ? '10' : '4';
+    
+    let bestFitArea = Infinity;
+    let bestP1 = null, bestP10 = null, bestLabel = "";
+
+    // A. Bounding Box Search
+    Object.keys(data).forEach(key => {
+        if (key.startsWith(`RET_COR${thickStr}_`) && key.endsWith(`_${sideStr}_1`)) {
+            const dimStr = key.split('_')[2]; 
+            const stdShort = parseInt(dimStr.substring(0, 2), 10);
+            const stdLong = parseInt(dimStr.substring(2), 10);
+            const stdArea = stdShort * stdLong;
+
+            if (reqShort <= stdShort && reqLong <= stdLong && stdArea < bestFitArea) {
+                bestFitArea = stdArea;
+                bestP1 = parseFloat(data[key]);
+                bestP10 = parseFloat(data[key.replace(/_1$/, '_10')]) || bestP1;
+                bestLabel = `${stdShort}x${stdLong}`;
+            }
+        }
+    });
+
+    let retailPrint = 0;
+    let baseSqFtRate = 0;
+    const t1Qty = parseFloat(data.Tier_1_Qty || 10);
+    const tierLog = [];
+
+    if (bestP1 !== null) {
+        const appliedBase = inputs.qty >= t1Qty ? bestP10 : bestP1;
+        retailPrint = appliedBase * inputs.qty;
+        baseSqFtRate = bestP1 / sqft;
+        tierLog.push(
+            { q: 1, base: bestP1, unit: bestP1 },
+            { q: t1Qty, base: bestP10, unit: bestP10 }
+        );
+    } else {
+        let minSignPrice = inputs.thickness === '10mm' ? 75 : 25;
+        if (inputs.thickness === '10mm') {
+            if (sqft <= 3.99) baseSqFtRate = 25.00;
+            else if (sqft <= 15.99) baseSqFtRate = 21.00;
+            else if (sqft <= 31.99) baseSqFtRate = 18.00;
+            else baseSqFtRate = 15.00;
+        } else {
+            if (sqft <= 3.99) baseSqFtRate = 8.33;
+            else if (sqft <= 15.99) baseSqFtRate = 7.00;
+            else if (sqft <= 31.99) baseSqFtRate = 6.00;
+            else baseSqFtRate = 5.00;
+        }
+
+        let signPrice = baseSqFtRate * sqft;
+        if (signPrice < minSignPrice) signPrice = minSignPrice;
+        if (inputs.sides === 2) signPrice *= 1.5;
+
+        const discPct = inputs.qty >= t1Qty ? parseFloat(data.Tier_1_Disc || 0.05) : 0;
+        const appliedBase = signPrice * (1 - discPct);
+        retailPrint = appliedBase * inputs.qty;
+
+        tierLog.push(
+            { q: 1, base: signPrice, unit: signPrice },
+            { q: t1Qty, base: signPrice * (1 - parseFloat(data.Tier_1_Disc || 0.05)), unit: signPrice * (1 - parseFloat(data.Tier_1_Disc || 0.05)) }
+        );
+    }
+
+    let routerFee = 0;
+    if (inputs.shape === 'CNC Simple') routerFee = parseFloat(data.Retail_Fee_Router_Easy || 30);
+    if (inputs.shape === 'CNC Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard || 50);
+
+    const feeDesign = inputs.incDesign ? parseFloat(data.Retail_Fee_Design || 45) : 0;
+    const feeSetupBase = parseFloat(data.Retail_Fee_Setup || 15);
+    const feeSetup = inputs.setupPerFile ? (feeSetupBase * inputs.files) : feeSetupBase;
+
+    const grandTotalRaw = retailPrint + routerFee + feeDesign + feeSetup;
+    const minOrder = bestP1 !== null ? 0 : parseFloat(data.Retail_Min_Order || 50);
+    const grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    tierLog.forEach(t => t.unit = (t.unit * t.q + routerFee) / t.q);
+
+    // --- 2. COST ENGINE ---
+    const costSheet = inputs.thickness === '10mm' ? parseFloat(data.Cost_Stock_10mm_4x8 || 33.49) : parseFloat(data.Cost_Stock_4mm_4x8 || 8.40);
+    const costPerSqFt = costSheet / 32;
+    const wastePct = parseFloat(data.Waste_Factor || 1.10);
+    const rawMat = costPerSqFt * totalSqFt;
+    const wasteCost = rawMat * (wastePct - 1);
+    const totalInk = totalSqFt * inputs.sides * parseFloat(data.Cost_Ink_Latex || 0.16);
+
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateCNC = parseFloat(data.Rate_CNC_Labor || 25);
+    const rateMachPrint = parseFloat(data.Rate_Machine_Flatbed || 45);
+    const rateMachCNC = parseFloat(data.Rate_Machine_CNC || 35);
+
+    let costCutSetup = 0, costCutLabor = 0, costCutMach = 0, runHrsCNC = 0;
+    if (inputs.shape === 'Rectangle') {
+        costCutSetup = (parseFloat(data.Time_Shear_Setup || 5) / 60) * rateOp;
+        costCutLabor = ((inputs.qty * 2 * parseFloat(data.Time_Shear_Cut || 1)) / 60) * rateOp;
+    } else {
+        costCutSetup = (parseFloat(data.Time_Setup_CNC || 10) / 60) * rateCNC;
+        const routeTimeSqFt = inputs.shape === 'CNC Complex' ? parseFloat(data.Time_CNC_Complex_SqFt || 2) : parseFloat(data.Time_CNC_Easy_SqFt || 1);
+        runHrsCNC = (totalSqFt * routeTimeSqFt) / 60;
+        costCutLabor = runHrsCNC * rateCNC;
+        costCutMach = runHrsCNC * rateMachCNC;
+    }
+
+    const setupMinsPrint = parseFloat(data.Time_Setup_Job || 15) + parseFloat(data.Time_Handling || 4);
+    const costSetupPrint = (setupMinsPrint / 60) * rateOp;
+    const speedPrint = parseFloat(data.Machine_Speed_LF_Hr || 25);
+    const printHrs = ((inputs.h / 12) * inputs.qty / speedPrint) * inputs.sides;
+    const attnRatio = parseFloat(data.Labor_Attendance_Ratio || 0.10);
+    const costPrintOp = printHrs * rateOp * attnRatio;
+    const costPrintMach = printHrs * rateMachPrint;
+
+    const subTotal = rawMat + wasteCost + totalInk + costSetupPrint + costPrintOp + costPrintMach + costCutSetup + costCutLabor + costCutMach;
+    const riskFactor = parseFloat(data.Factor_Risk || 1.05);
+    const riskBuffer = subTotal * (riskFactor - 1);
+
+    return {
+        retail: {
+            unitPrice: (retailPrint + routerFee) / inputs.qty, printTotal: retailPrint, routerFee: routerFee, setupFee: feeSetup, designFee: feeDesign,
+            grandTotal: grandTotal, isMinApplied: grandTotalRaw < minOrder, tiers: tierLog, yieldLabel: bestLabel ? `Yield Box: ${bestLabel}` : "Area Curve"
+        },
+        cost: {
+            total: subTotal,
+            breakdown: { rawBlanks: rawMat, wasteCost: wasteCost, wastePct: (wastePct - 1) * 100, totalInk: totalInk, costSetup: costSetupPrint + costCutSetup, costCut: costCutLabor + costCutMach, runHrs: printHrs + runHrsCNC, costMachine: costPrintMach + costCutMach, costOp: costPrintOp + costCutLabor, riskCost: riskBuffer, riskPct: (riskFactor - 1) * 100 }
+        },
+        metrics: { margin: (grandTotal - subTotal) / grandTotal }
+    };
+}
+// ==========================================
+// SIMULATOR CONFIGURATION SCHEMA
+// ==========================================
+window.CORO_CONFIG = {
+    tab: 'PROD_Coroplast_Signs',
+    engine: calculateCoro,
+    controls: [
+        { id: 'w', label: 'Width (in)', type: 'number', def: 24 },
+        { id: 'h', label: 'Height (in)', type: 'number', def: 18 },
+        { id: 'thickness', label: 'Thickness', type: 'select', opts: [{v:'4mm', t:'4mm Standard'}, {v:'10mm', t:'10mm Heavy Duty'}] },
+        { id: 'sides', label: 'Print Sides', type: 'select', opts: [{v:1, t:'1-Sided'}, {v:2, t:'2-Sided'}] },
+        { id: 'shape', label: 'Cut Type', type: 'select', opts: [{v:'Rectangle', t:'Square Cut'}, {v:'CNC Simple', t:'CNC Simple'}, {v:'CNC Complex', t:'CNC Complex'}] },
+        { id: 'files', label: 'Files', type: 'number', def: 1 },
+        { id: 'setupPerFile', label: 'Setup / File', type: 'toggle', def: false },
+        { id: 'incDesign', label: 'Design Fee', type: 'toggle', def: false }
+    ],
+    retails: [
+        { heading: '4mm Area Curves', key: 'COR4_T1_Rate', label: 'T1 Rate ($/sf)' },
+        { key: 'COR4_T2_Rate', label: 'T2 Rate ($/sf)' },
+        { heading: '10mm Area Curves', key: 'COR10_T1_Rate', label: 'T1 Rate ($/sf)' },
+        { key: 'COR10_T2_Rate', label: 'T2 Rate ($/sf)' },
+        { heading: 'Adders & Fees', key: 'Retail_Adder_DS_4mm', label: '4mm DS Add ($/sf)' },
+        { key: 'Retail_Adder_DS_10mm', label: '10mm DS Add ($/sf)' },
+        { key: 'Retail_Fee_Router_Easy', label: 'CNC Simple Fee' },
+        { key: 'Retail_Fee_Router_Hard', label: 'CNC Complex Fee' },
+        { heading: 'Discounts', key: 'Tier_1_Qty', label: 'T1 Discount Qty' },
+        { key: 'Tier_1_Disc', label: 'T1 Discount (%)' }
+    ],
+    costs: [
+        { heading: 'Materials', key: 'Cost_Stock_4mm_4x8', label: '4mm 4x8 Sheet ($)' },
+        { key: 'Cost_Stock_10mm_4x8', label: '10mm 4x8 Sheet ($)' },
+        { key: 'Cost_Ink_Latex', label: 'Latex Ink ($/SqFt)' },
+        { heading: 'Machine Speeds & Time', key: 'Machine_Speed_LF_Hr', label: 'Print Spd (LF/hr)' },
+        { key: 'Time_Setup_Job', label: 'Print Setup (Mins)' },
+        { key: 'Time_Handling', label: 'Handling (Mins)' },
+        { key: 'Time_Setup_CNC', label: 'CNC Setup (Mins)' },
+        { key: 'Time_CNC_Easy_SqFt', label: 'CNC Easy (Mins/sf)' },
+        { heading: 'Rates & Overhead', key: 'Rate_Operator', label: 'Print Op ($/Hr)' },
+        { key: 'Rate_CNC_Labor', label: 'CNC Op ($/Hr)' },
+        { key: 'Rate_Machine_Flatbed', label: 'Printer Mach ($/Hr)' },
+        { key: 'Rate_Machine_CNC', label: 'Router Mach ($/Hr)' },
+        { key: 'Labor_Attendance_Ratio', label: 'Attn Ratio (0-1)' },
+        { key: 'Waste_Factor', label: 'Waste Buffer' }
+    ],
+    renderReceipt: function(data, fmt) {
+        let retailHTML = `<div><h4 class="text-[10px] font-bold text-blue-800 uppercase mb-2 border-b border-blue-200 pb-1">Market Engine (Retail)</h4>
+        <div class="space-y-1 text-xs text-gray-700">
+        <div class="flex justify-between"><span>Base Print:</span> <span>${fmt(data.retail.printTotal)}</span></div>
+        ${data.retail.routerFee > 0 ? `<div class="flex justify-between text-orange-700"><span>CNC Routing Fee:</span> <span>${fmt(data.retail.routerFee)}</span></div>` : ''}
+        <div class="flex justify-between"><span>Setup Fee:</span> <span>${fmt(data.retail.setupFee || 0)}</span></div>
+        ${data.retail.designFee > 0 ? `<div class="flex justify-between text-purple-700"><span>Design Fee:</span> <span>${fmt(data.retail.designFee)}</span></div>` : ''}
+        <div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Retail:</span> <span>${fmt(data.retail.grandTotal)}</span></div>
+        </div></div>`;
+
+        let costHTML = `<div class="mt-6"><h4 class="text-[10px] font-bold text-red-800 uppercase mb-2 border-b border-red-200 pb-1">Physics Engine (Cost)</h4>
+        <div class="space-y-1 text-xs text-gray-700">`;
+        if (data.cost.breakdown) {
+            const b = data.cost.breakdown;
+            costHTML += `
+            <div class="flex justify-between"><span>Raw Blanks/Sheets:</span> <span>${fmt(b.rawBlanks)}</span></div>
+            <div class="flex justify-between"><span>Ink:</span> <span>${fmt(b.totalInk)}</span></div>
+            <div class="flex justify-between"><span>Setup Labor:</span> <span>${fmt(b.costSetup)}</span></div>
+            <div class="flex justify-between"><span>Machine Run (${b.runHrs ? b.runHrs.toFixed(2) : 0}h):</span> <span>${fmt(b.costMachine)}</span></div>
+            <div class="flex justify-between"><span>Operator Labor (Attn Ratio):</span> <span>${fmt(b.costOp)}</span></div>
+            <div class="border-t border-gray-200 mt-2 pt-1"></div>
+            <div class="flex justify-between text-red-600"><span>Material Waste (${b.wastePct ? b.wastePct.toFixed(0) : 10}%):</span> <span>+ ${fmt(b.wasteCost)}</span></div>
+            <div class="flex justify-between text-orange-500 opacity-80"><span>Suggested Risk Buffer (${b.riskPct ? b.riskPct.toFixed(0) : 5}%):</span> <span>(+ ${fmt(b.riskCost)})</span></div>`;
+        }
+        costHTML += `<div class="flex justify-between font-black text-gray-900 border-t border-gray-300 pt-1 mt-1"><span>Total Hard Cost:</span> <span>${fmt(data.cost.total)}</span></div></div></div>`;
+        return retailHTML + costHTML;
+    }
+};
+
+
+========================================
+FILE: logic_cut.js
+========================================
+/**
+ * ULTRA-SIMPLE RETAIL ENGINE: Cut Vinyl Lettering
+ * Specific support for 751, 951, and 8500.
+ */
+function calculateCutVinyl(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    
+    // 1. Material Base Rate Lookup
+    let baseRate = 0;
+    if (inputs.material === '951') {
+        baseRate = parseFloat(data.Retail_Price_951) || 22.00;
+    } else if (inputs.material === '8500') {
+        baseRate = parseFloat(data.Retail_Price_8500) || 20.00;
+    } else {
+        baseRate = parseFloat(data.Retail_Price_751) || 18.00; // 751 Default
+    }
+
+    let unitPrint = baseRate * sqft;
+    let retailPrint = unitPrint * inputs.qty;
+
+    // 2. Volume Discounts (Tiers 1 & 2)
+    let discPct = 0;
+    const t2Qty = parseFloat(data.Tier_2_Qty) || 50;
+    const t1Qty = parseFloat(data.Tier_1_Qty) || 10;
+
+    if (inputs.qty >= t2Qty) {
+        discPct = parseFloat(data.Tier_2_Disc) || 0.10;
+    } else if (inputs.qty >= t1Qty) {
+        discPct = parseFloat(data.Tier_1_Disc) || 0.05;
+    }
+
+    retailPrint *= (1 - discPct);
+
+    // 3. Weeding Complexity Adder
+    let retailWeed = 0;
+    if (inputs.weeding === 'Complex') {
+        const weedAdder = parseFloat(data.Retail_Weed_Complex_Add) || 5.00;
+        retailWeed = weedAdder * sqft * inputs.qty;
+    }
+
+    // 4. Shop Minimum Guard
+    const minOrder = parseFloat(data.Retail_Min_Order) || 45;
+    let grandTotalRaw = retailPrint + retailWeed;
+    let grandTotal = Math.max(grandTotalRaw, minOrder);
+
+    return {
+        retail: {
+            unitPrice: grandTotal / inputs.qty,
+            printTotal: retailPrint,
+            weedTotal: retailWeed,
+            grandTotal: grandTotal,
+            isMinApplied: grandTotalRaw < minOrder
+        },
+        cost: { total: 0 } 
+    };
+}
+
+
+========================================
+FILE: modules/logic_yard.js
+========================================
+// logic_yard.js (Retail Engine)
+window.calculateRetailYard = function(inputs, data) {
+    // 1. Fetch Variables
+    const baseSS = parseFloat(data.Retail_Price_Sign_SS || 25.00);
+    const adderDS = parseFloat(data.Retail_Price_Sign_DS || 2.50);
+    
+    const stk1P = parseFloat(data.Retail_Stake_T1_Price || 2.00);
+    const stkT2Q = parseFloat(data.Retail_Stake_T2_Qty || 50);
+    const stkT2P = parseFloat(data.Retail_Stake_T2_Price || 1.75);
+    const stkT3Q = parseFloat(data.Retail_Stake_T3_Qty || 100);
+    const stkT3P = parseFloat(data.Retail_Stake_T3_Price || 1.50);
+
+    // 2. Print Tier Logic
+    let unitPrint = baseSS + (inputs.sides === 2 ? adderDS : 0);
+    const t1Qty = parseFloat(data.Tier_1_Qty || 10);
+    const t1Price = parseFloat(data.Tier_1_Price || 23.75);
+    
+    if (inputs.qty >= t1Qty) {
+        unitPrint = t1Price + (inputs.sides === 2 ? adderDS : 0);
+    }
+
+    // 3. Stake Tier Logic
+    let activeStakePrice = stk1P;
+    if (inputs.qty >= stkT3Q) activeStakePrice = stkT3P;
+    else if (inputs.qty >= stkT2Q) activeStakePrice = stkT2P;
+
+    // 4. Final Math
+    let retailPrint = unitPrint * inputs.qty;
+    let retailStake = inputs.hasStakes ? (activeStakePrice * inputs.qty) : 0;
+
+    return {
+        unitPrice: (retailPrint + retailStake) / inputs.qty,
+        printTotal: retailPrint,
+        stakeTotal: retailStake,
+        grandTotal: retailPrint + retailStake
+    };
+};
+
+========================================
+FILE: modules/logic_acm.js
+========================================
+window.calculateRetailACM = function(inputs, data) {
+    const sqft = (inputs.w * inputs.h) / 144;
+    const thk = inputs.thickness === '6mm' ? '6' : '3';
+    let baseRate = 0;
+
+    // 1. User-Controlled Area Curves
+    if (thk === '6') {
+         if(sqft <= parseFloat(data.ACM6_T1_Max||2.99)) baseRate = parseFloat(data.ACM6_T1_Rate||25);
+         else if(sqft <= parseFloat(data.ACM6_T2_Max||5.99)) baseRate = parseFloat(data.ACM6_T2_Rate||20);
+         else baseRate = parseFloat(data.ACM6_T3_Rate||16.5);
+    } else {
+         if(sqft <= parseFloat(data.ACM3_T1_Max||2.99)) baseRate = parseFloat(data.ACM3_T1_Rate||24);
+         else if(sqft <= parseFloat(data.ACM3_T2_Max||5.99)) baseRate = parseFloat(data.ACM3_T2_Rate||18);
+         else baseRate = parseFloat(data.ACM3_T3_Rate||14);
+    }
+
+    let unitPrint = baseRate * sqft;
+    const minSignPrice = parseFloat(data[`ACM${thk}_T1_Min`] || 25);
+    if(unitPrint < minSignPrice) unitPrint = minSignPrice;
+
+    // 2. Modifiers
+    if (inputs.sides === 2) unitPrint *= (1 + parseFloat(data.Retail_Adder_DS_Mult||0.5));
+    if (inputs.color === 'Black') unitPrint *= parseFloat(data.Retail_Adder_Black_Mult||2);
+
+    let retailPrint = unitPrint * inputs.qty;
+    if (inputs.qty >= parseFloat(data.Tier_1_Qty||10)) retailPrint *= (1 - parseFloat(data.Tier_1_Disc||0.05));
+
+    // 3. Routing & Fees
+    let routerFee = 0;
+    if(inputs.shape === 'CNC Simple') routerFee = parseFloat(data.Retail_Fee_Router_Easy||30);
+    if(inputs.shape === 'CNC Complex') routerFee = parseFloat(data.Retail_Fee_Router_Hard||50);
+
+    const setupFee = parseFloat(data.Retail_Fee_Setup||15);
+    const grandTotal = retailPrint + routerFee + setupFee;
+    const minOrder = parseFloat(data.Retail_Min_Order||50);
+
+    return {
+        unitPrice: grandTotal / inputs.qty,
+        printTotal: retailPrint,
+        grandTotal: grandTotal < minOrder ? minOrder : grandTotal
+    };
+};
+
+========================================
+FILE: modules/cost_acm.js
+========================================
+window.calculateCostACM = function(inputs, data) {
+    const sqin = inputs.w * inputs.h;
+    const totalSqin = sqin * inputs.qty;
+    const sqft = totalSqin / 144;
+
+    // 1. Material Yield & Waste
+    let sheetCost = inputs.thickness === '6mm' ? parseFloat(data.Cost_Stock_6mm_4x8 || 72.10) : parseFloat(data.Cost_Stock_3mm_4x8 || 52.09);
+    const waste = parseFloat(data.Waste_Factor || 1.15);
+    const sheetsNeeded = Math.ceil((totalSqin * waste) / (48 * 96));
+    const matCost = sheetsNeeded * sheetCost;
+
+    // 2. Ink & Print Physics
+    const inkCost = sqft * inputs.sides * parseFloat(data.Cost_Ink_Latex || 0.16);
+    const speedLF = parseFloat(data.Machine_Speed_LF_Hr || 25);
+    const linearFeet = (sheetsNeeded * 8) * inputs.sides; // Assuming 8ft passes
+    const printRunHrs = linearFeet / speedLF;
+
+    const printMachCost = printRunHrs * parseFloat(data.Rate_Machine_Flatbed || 10);
+    const printOpCost = printRunHrs * parseFloat(data.Rate_Operator || 25) * parseFloat(data.Labor_Attendance_Ratio || 1.0);
+    const printSetupCost = (parseFloat(data.Time_Setup_Printer || 5) / 60) * parseFloat(data.Rate_Operator || 25);
+
+    // 3. Finishing Physics (Shear vs CNC)
+    let cutMachCost = 0, cutOpCost = 0, cutSetupCost = 0;
+    
+    if (inputs.shape === 'Rectangle') { // Shear Math
+        const shearTime = ((parseFloat(data.Time_Shear_Cut || 1) * inputs.qty) / 60);
+        cutOpCost = shearTime * parseFloat(data.Rate_Shop_Labor || 20);
+        cutSetupCost = (parseFloat(data.Time_Shear_Setup || 5) / 60) * parseFloat(data.Rate_Shop_Labor || 20);
+    } else { // CNC Math
+        const rateCNC = parseFloat(data.Rate_CNC_Labor || 25);
+        const runHrsCNC = ((parseFloat(inputs.shape === 'CNC Simple' ? data.Time_CNC_Easy_SqFt || 1 : data.Time_CNC_Complex_SqFt || 2)) * sqft) / 60;
+        cutMachCost = runHrsCNC * parseFloat(data.Rate_Machine_CNC || 10);
+        cutOpCost = runHrsCNC * rateCNC * parseFloat(data.Labor_Attendance_Ratio || 0.10);
+        cutSetupCost = (parseFloat(data.Time_Setup_CNC || 10) / 60) * rateCNC;
+    }
+
+    const totalCost = matCost + inkCost + printMachCost + printOpCost + printSetupCost + cutMachCost + cutOpCost + cutSetupCost;
+
+    return { total: totalCost, breakdown: { matCost, inkCost } };
+};
+
+========================================
+FILE: modules/cost_yard.js
+========================================
+// cost_yard.js (Physics Engine)
+window.calculateCostYard = function(inputs, data) {
+    // 1. Bill of Materials
+    const blankCost = parseFloat(data.Cost_Blank_Standard || 0.65);
+    const waste = parseFloat(data.Waste_Factor || 1.05);
+    const matCost = (blankCost * waste) * inputs.qty;
+    
+    const stakeCost = inputs.hasStakes ? (parseFloat(data.Cost_Stake || 0.65) * inputs.qty) : 0;
+    
+    const areaSqFt = (24 * 18) / 144;
+    const inkCost = areaSqFt * inputs.qty * inputs.sides * parseFloat(data.Cost_Ink_Base || 0.16);
+
+    // 2. Linear Nesting Physics (HP R1000)
+    const bedCap = parseFloat(data.Printer_Bed_Capacity || 3);
+    const speedLF = parseFloat(data.Machine_Speed_LF_Hr || 25);
+    
+    const setsNeeded = Math.ceil(inputs.qty / bedCap);
+    const lfPerSet = 2.0; // 24" feed direction
+    const totalLF = setsNeeded * lfPerSet * inputs.sides;
+    
+    const runHrs = totalLF / speedLF;
+
+    // 3. Labor & Overhead Utilization
+    const rateOp = parseFloat(data.Rate_Operator || 25);
+    const rateMach = parseFloat(data.Rate_Machine || 10);
+    const attnRatio = 1.0; // 100% Attendance required for Yard Signs
+    
+    const costMachine = runHrs * rateMach;
+    const costOp = runHrs * rateOp * attnRatio;
+    const costSetup = (parseFloat(data.Time_Setup_Base || 15) / 60) * rateOp;
+
+    return {
+        total: matCost + stakeCost + inkCost + costMachine + costOp + costSetup,
+        breakdown: { matCost, stakeCost, inkCost, costMachine, costOp, costSetup }
+    };
+};
