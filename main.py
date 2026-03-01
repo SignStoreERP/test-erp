@@ -268,7 +268,7 @@ def export_context_local():
         with open(f"{export_dir}/{timestamp} - SignOS_Frontend.txt", "w", encoding="utf-8") as f: f.write(frontend_content)
         with open(f"{export_dir}/{timestamp} - SignOS_Changelog.txt", "w", encoding="utf-8") as f: f.write(changelog_content)
 
-        return {"status": "success", "message": f"Context Snapshots saved to /notebook_context/ as version {timestamp}"}
+        return {"status": "success", "message": f"Context Snapshots saved to /notebook_context/.", "version": timestamp}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

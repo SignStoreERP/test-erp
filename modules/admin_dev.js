@@ -5,7 +5,8 @@ window.init_admin_dev = async function(stage, api_url) {
     // Fetch GitHub status on load
     let gitStatus = { state: "UNKNOWN", color: "text-gray-500", local_changes: [], remote_diff: [] };
     try {
-        const res = await fetch(`${api_url}/api/system/git-status`).then(r => r.json());
+        // CACHE-BUSTER ADDED: Forces the browser to get a fresh status every time by appending a unique timestamp
+        const res = await fetch(`${api_url}/api/system/git-status?nocache=${Date.now()}`).then(r => r.json());
         if (res.status === 'success') gitStatus = res;
     } catch (e) {
         console.warn("Could not fetch Git status");
@@ -92,16 +93,32 @@ window.init_admin_dev = async function(stage, api_url) {
             <!-- 3. NOTEBOOK LM CARD -->
             <div class="bg-white rounded-3xl border shadow-sm overflow-hidden">
                 <div class="p-6 border-b bg-slate-50 flex justify-between items-center">
-                    <h3 class="font-bold text-slate-800 flex items-center gap-2"><i data-lucide="bot" class="w-5 h-5"></i> AI Context Export</h3>
+                    <h3 class="font-bold text-slate-800 flex items-center gap-2"><i data-lucide="bot" class="w-5 h-5"></i> AI Context Generator</h3>
                 </div>
-                <div class="p-6 flex items-center justify-between">
-                    <div>
-                        <p class="text-sm font-bold text-slate-700">Generate Master Context Files</p>
-                        <p class="text-xs text-slate-500">Writes timestamped versions to the <code>/notebook_context/</code> folder.</p>
+                <div class="p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <p class="text-sm font-bold text-slate-700">NotebookLM Context Bundles</p>
+                            <p class="text-xs text-slate-500">Compiles codebase into text files and commits them to the environment's GitHub repository.</p>
+                        </div>
                     </div>
-                    <button onclick="window.devExportContext()" class="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold shadow-md hover:bg-indigo-700 transition-all flex items-center gap-2">
-                        Execute Export
-                    </button>
+                    
+                    <div class="bg-slate-50 rounded-xl border border-slate-200 p-4">
+                        <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+                            <div class="flex items-center gap-3 w-full">
+                                <div id="context-indicator" class="w-2 h-2 rounded-full bg-slate-300"></div>
+                                <span id="context-status-text" class="text-sm text-slate-600 font-mono">Ready to generate.</span>
+                            </div>
+                            <div class="flex gap-2 shrink-0">
+                                <button id="btn-generate-context" onclick="window.devExportContext()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow hover:bg-indigo-700 transition-all">
+                                    1. Generate Files
+                                </button>
+                                <button id="btn-push-context" onclick="window.devPushContext()" class="bg-slate-300 text-slate-500 px-4 py-2 rounded-lg text-xs font-bold cursor-not-allowed transition-all" disabled>
+                                    2. Push to GitHub
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -213,11 +230,80 @@ window.devImportDB = async function() {
 
 // --- SYSTEM LOGIC ---
 
+window.currentContextVersion = null;
+
 window.devExportContext = async function() {
+    const statusText = document.getElementById('context-status-text');
+    const indicator = document.getElementById('context-indicator');
+    const btnGen = document.getElementById('btn-generate-context');
+    const btnPush = document.getElementById('btn-push-context');
+
+    statusText.innerText = "Compiling source code...";
+    indicator.className = "w-2 h-2 rounded-full bg-indigo-500 animate-pulse";
+    btnGen.disabled = true;
+    btnGen.classList.add('opacity-50', 'cursor-not-allowed');
+
     try {
         const res = await fetch(`${API}/api/system/export-context`, { method: 'POST' }).then(r => r.json());
-        alert(res.message);
-    } catch(e) { alert("Failed to export context."); }
+        
+        if (res.status === 'success') {
+            window.currentContextVersion = res.version;
+            statusText.innerText = `Version ${res.version} generated successfully.`;
+            indicator.className = "w-2 h-2 rounded-full bg-green-500";
+            
+            // Enable Push Button
+            btnPush.disabled = false;
+            btnPush.className = "bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow hover:bg-emerald-700 transition-all";
+            btnGen.innerText = "Re-Generate";
+            btnGen.disabled = false;
+            btnGen.classList.remove('opacity-50', 'cursor-not-allowed');
+        } else {
+            throw new Error(res.message);
+        }
+    } catch(e) { 
+        statusText.innerText = `Generation Failed: ${e.message}`;
+        indicator.className = "w-2 h-2 rounded-full bg-red-500";
+        btnGen.disabled = false;
+        btnGen.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+};
+
+window.devPushContext = async function() {
+    const statusText = document.getElementById('context-status-text');
+    const indicator = document.getElementById('context-indicator');
+    const btnPush = document.getElementById('btn-push-context');
+
+    if (!window.currentContextVersion) return;
+
+    statusText.innerText = "Pushing to GitHub repository...";
+    indicator.className = "w-2 h-2 rounded-full bg-blue-500 animate-pulse";
+    btnPush.disabled = true;
+    btnPush.classList.add('opacity-50', 'cursor-not-allowed');
+
+    try {
+        const msg = `docs: auto-generated notebook context version ${window.currentContextVersion}`;
+        const res = await fetch(`${API}/api/system/git-push`, {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({ message: msg })
+        }).then(r => r.json());
+
+        if (res.status === 'success') {
+            statusText.innerText = `Success! Version ${window.currentContextVersion} is now on GitHub.`;
+            indicator.className = "w-2 h-2 rounded-full bg-green-500";
+            btnPush.innerText = "Pushed ✓";
+            
+            // Refresh the whole console to update the GitHub Status card at the top
+            setTimeout(() => loadModule('admin_dev'), 2000);
+        } else {
+            throw new Error(res.message);
+        }
+    } catch(e) { 
+        statusText.innerText = `Push Failed: ${e.message}`;
+        indicator.className = "w-2 h-2 rounded-full bg-red-500";
+        btnPush.disabled = false;
+        btnPush.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
 };
 
 window.devRebootAPI = async function() {
